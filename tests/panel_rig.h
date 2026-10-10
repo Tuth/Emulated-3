@@ -35,6 +35,10 @@ struct rig
 	uint64_t hash = 1469598103934665603ull;     // FNV-1a over the output samples
 	bool poll_every_block = true;
 	std::function<void()> on_block;
+	// sampling input: fills L/R for the next n frames (absolute frame index = frames pulled so far); unset = none
+	std::function<void(uint64_t frame, float *l, float *r, size_t n)> input;
+	uint64_t frames_pulled = 0;
+	std::vector<float> in_l = std::vector<float>(4096), in_r = std::vector<float>(4096);
 
 	explicit rig(eiii::engine_config const &c) { e.start(c); }
 	double now() const { return ui.snapshot().emu_seconds; }
@@ -43,7 +47,9 @@ struct rig
 		while (frames)
 		{
 			size_t const n = std::min(frames, block);
+			if (input) { input(frames_pulled, in_l.data(), in_r.data(), n); e.input(in_l.data(), in_r.data(), n); }
 			e.pull(l.data(), r.data(), n);
+			frames_pulled += n;
 			for (size_t i = 0; i < n; ++i)
 			{
 				sum_sq += double(l[i]) * l[i] + double(r[i]) * r[i]; ++n_meas;

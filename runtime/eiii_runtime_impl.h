@@ -36,6 +36,8 @@ struct runtime::impl
 		std::unique_ptr<cdrom_image_device> cd_img;
 		std::unique_ptr<cdda_device> cdda;
 	} extra[8];
+	std::string warning;
+	harddisk_image_device *hd_image(unsigned id) const { return id == 1 ? hd_img.get() : id < 8 ? extra[id].hd_img.get() : nullptr; }
 	cdrom_image_device *cd_image(unsigned id) { return id == 3 ? cd_img.get() : id < 8 ? extra[id].cd_img.get() : nullptr; }
 	std::unique_ptr<ncr5380_device> hdc;
 	std::unique_ptr<scc85230_device> scc;
