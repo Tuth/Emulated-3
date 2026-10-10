@@ -1,0 +1,53 @@
+# Build output
+build/
+dist/
+*.o
+*.d
+*.a
+*.so
+*.clap
+*.dSYM/
+
+# Built test / tool / standalone binaries (sources have extensions)
+/tests/*
+!/tests/*.*
+/tools/*
+!/tools/*.*
+/standalone/eiii-standalone
+
+# Hand-made backups (history lives in git now)
+*.before_*
+*.v1
+*.orig
+*.rej
+
+# E-mu material: never commit ROMs, OS, disk images or sample/bank data
+*.bin
+*.rom
+*.ROM
+*.hd
+*.HD
+*.hda
+*.img
+*.iso
+*.ISO
+*.cue
+*.bin.gz
+*.hfe
+*.HFE
+*.e3
+*.e3b
+*.eiii
+*.wav
+*.aif
+*.aiff
+roms/
+images/
+dumps/
+
+# Local configuration / scratch
+eiii.conf
+*.log
+*.swp
+*~
+.cache/

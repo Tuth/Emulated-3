@@ -1,0 +1,182 @@
+diff --git a/src/devices/bus/nscsi/cd.cpp b/src/devices/bus/nscsi/cd.cpp
+index d720edec..81abda91 100644
+--- a/src/devices/bus/nscsi/cd.cpp
++++ b/src/devices/bus/nscsi/cd.cpp
+@@ -9,7 +9,7 @@
+ #include "multibyte.h"
+ #include "speaker.h"
+ 
+-#define VERBOSE (0)
++#define VERBOSE (1)
+ #include "logmacro.h"
+ 
+ DEFINE_DEVICE_TYPE(NSCSI_CDROM, nscsi_cdrom_device, "scsi_cdrom", "SCSI CD-ROM")
+diff --git a/src/devices/machine/ncr5380.cpp b/src/devices/machine/ncr5380.cpp
+index 3901dbca..1d0a5261 100644
+--- a/src/devices/machine/ncr5380.cpp
++++ b/src/devices/machine/ncr5380.cpp
+@@ -241,7 +241,8 @@ void ncr5380_device::scsi_ctrl_changed()
+ 				// read loops a garbage byte).
+ 				if (!(m_tcmd & TC_IO))
+ 					set_drq(true);
+-				set_irq(true);
++				else
++					set_irq(true); // diagnostic: EIII polls SEND phase changes
+ 			}
+ 		}
+ 	}
+@@ -778,24 +779,72 @@ void ncr5380_device::eop_w(int state)
+ 
+ void ncr5380_device::dma_w(u8 data)
+ {
+-	set_drq(false);
++        set_drq(false);
+ 
+-	if (m_mode & MODE_DMA)
+-	{
+-		m_odata = data;
++        if (m_mode & MODE_DMA)
++        {
++                m_odata = data;
+ 
+-		m_state_timer->adjust(attotime::zero);
+-	}
++                // Pseudo-DMA hosts may perform a string of writes as one CPU
++                // instruction, without giving a zero-delay timer an opportunity
++                // to run between bytes. Advance the immediate REQ/ACK hand-off
++                // synchronously so each bus write transfers exactly one byte and
++                // the next DRQ is ready before the next CPU write.
++                m_state_timer->enable(false);
++
++                for (unsigned i = 0; i != 4 && m_state != IDLE && !m_drq_state; i++)
++                {
++                        state const previous = m_state;
++                        int const delay = state_step();
++
++                        // A nested bus callback may have queued the same immediate
++                        // state step we just completed synchronously.
++                        m_state_timer->enable(false);
++
++                        if (delay < 0 || (delay == 0 && m_state == previous))
++                                break;
++
++                        if (delay > 0)
++                        {
++                                m_state_timer->adjust(attotime::from_nsec(delay));
++                                break;
++                        }
++                }
++        }
+ }
+ 
+ u8 ncr5380_device::dma_r()
+ {
++	u8 const data = m_idata;
++	LOGMASKED(LOG_DMA, "dma_r returns: 0x%02x (%s)\n", data, machine().describe_context());
++
+ 	set_drq(false);
+ 
+ 	if (m_mode & MODE_DMA)
+-		m_state_timer->adjust(attotime::zero);
++	{
++		// Pseudo-DMA hosts may execute a string of reads as one CPU
++		// instruction, without giving a zero-delay timer an opportunity to run
++		// between bytes.  Complete the immediate REQ/ACK hand-off here so the
++		// next byte is ready for the next bus read.
++		m_state_timer->enable(false);
++		for (unsigned i = 0; i != 4 && m_state != IDLE && !m_drq_state; i++)
++		{
++			state const previous = m_state;
++			int const delay = state_step();
++			// A nested bus-control callback may have queued the same immediate
++			// state step we have just completed synchronously.
++			m_state_timer->enable(false);
++			if (delay < 0 || (delay == 0 && m_state == previous))
++				break;
++			if (delay > 0)
++			{
++				m_state_timer->adjust(attotime::from_nsec(delay));
++				break;
++			}
++		}
++	}
+ 
+-	return m_idata;
++	return data;
+ }
+ 
+ void ncr5380_device::scsi_data_w(u8 data)
+diff --git a/src/devices/machine/nscsi_hle.cpp b/src/devices/machine/nscsi_hle.cpp
+index 83d9ec61..ba6eac75 100644
+--- a/src/devices/machine/nscsi_hle.cpp
++++ b/src/devices/machine/nscsi_hle.cpp
+@@ -123,17 +123,21 @@ void nscsi_full_device::step(bool timeout)
+ 
+ 	switch(m_scsi_state & SUB_MASK ? m_scsi_state & SUB_MASK : m_scsi_state & STATE_MASK) {
+ 	case IDLE:
+-		if(((ctrl & (S_SEL|S_BSY)) == S_SEL) && (m_scsi_id != -1) && ((data & (1 << m_scsi_id)) != 0)) {
+-			for(m_scsi_initiator_id = 0; m_scsi_initiator_id != 16 && (m_scsi_initiator_id == m_scsi_id || (data & (1 << m_scsi_initiator_id))); m_scsi_initiator_id++) {};
+-			if(m_scsi_initiator_id == 16)
+-				m_scsi_initiator_id = -1;
++		if(((ctrl & (S_SEL|S_BSY)) == S_SEL) && (m_scsi_id != -1)) {
+ 			m_scsi_state = TARGET_SELECT_WAIT_BUS_SETTLE;
+ 			m_scsi_timer->adjust(scsi_bus_settle_delay(), true);
+ 		}
+ 		break;
+ 
+ 	case TARGET_SELECT_WAIT_BUS_SETTLE:
+-		if((ctrl & (S_SEL|S_BSY)) == S_SEL) {
++		LOG("select settle id=%d data=%04x ctrl=%04x\n", m_scsi_id, data, ctrl);
++		// Selection IDs only need to be valid after the bus-settle interval.
++		// Sampling them on the SEL edge incorrectly captures arbitration data
++		// from initiators that update the data bus immediately after SEL.
++		if((ctrl & (S_SEL|S_BSY)) == S_SEL && (data & (1 << m_scsi_id))) {
++			for(m_scsi_initiator_id = 0; m_scsi_initiator_id != 16 && (m_scsi_initiator_id == m_scsi_id || (data & (1 << m_scsi_initiator_id))); m_scsi_initiator_id++) {};
++			if(m_scsi_initiator_id == 16)
++				m_scsi_initiator_id = -1;
+ 			m_scsi_state = TARGET_SELECT_WAIT_SEL_0;
+ 			m_scsi_bus->ctrl_w(m_scsi_refid, S_BSY, S_BSY);
+ 		} else
+@@ -181,7 +185,16 @@ void nscsi_full_device::step(bool timeout)
+ 		if(!(ctrl & S_ACK)) {
+ 			m_scsi_state &= STATE_MASK;
+ 			m_scsi_bus->ctrl_wait(m_scsi_refid, 0, S_ACK);
+-			attotime delay = scsi_data_byte_period();
++			attotime delay;
++			if (m_scsi_state == TARGET_NEXT_CONTROL) {
++				// Do not hold BSY after the final MESSAGE IN byte.
++				// The EIII immediately begins its next arbitration.
++				delay = (ctrl & S_PHASE_MASK) == S_PHASE_MSG_IN
++					? attotime::zero
++					: scsi_phase_transition_delay();
++			} else {
++				delay = scsi_data_byte_period();
++			}
+ 			if (delay == attotime::zero) {
+ 				step(false);
+ 			} else {
+@@ -822,6 +835,11 @@ attotime nscsi_full_device::scsi_data_byte_period()
+ 	return attotime::zero;
+ }
+ 
++attotime nscsi_full_device::scsi_phase_transition_delay()
++{
++	return attotime::zero;
++}
++
+ // Command execution delay (immediate)
+ attotime nscsi_full_device::scsi_data_command_delay()
+ {
+diff --git a/src/devices/machine/nscsi_hle.h b/src/devices/machine/nscsi_hle.h
+index 5109a83d..b1915c21 100644
+--- a/src/devices/machine/nscsi_hle.h
++++ b/src/devices/machine/nscsi_hle.h
+@@ -650,6 +650,8 @@ protected:
+ 
+ 	// Byte transfer rate (immediate)
+ 	virtual attotime scsi_data_byte_period();
++	// Additional target delay between the final data byte and the next phase
++	virtual attotime scsi_phase_transition_delay();
+ 
+ 	// Command delay (immediate)
+ 	virtual attotime scsi_data_command_delay();
