@@ -24,8 +24,79 @@ void set_ftz()
 }
 }
 
+struct media_request { media_result r; };
+
+char const *media_slot_name(media_slot s) { return s == media_slot::cd ? "cd" : s == media_slot::hd ? "hd" : "rom_dir"; }
+
 engine::engine() = default;
-engine::~engine() { shutdown(); }
+engine::~engine()
+{
+	shutdown();
+	media_request *rq;
+	while (m_media_in.pop(rq)) delete rq;
+	while (m_media_out.pop(rq)) delete rq;
+}
+
+static std::string &cfg_path(runtime_config &c, media_slot s) { return s == media_slot::cd ? c.cd_path : s == media_slot::hd ? c.hd_path : c.rom_dir; }
+
+bool engine::set_media(media_slot slot, std::string const &path)
+{
+	if (m_media_inflight >= 8) return false;
+	auto *rq = new media_request;
+	rq->r.slot = slot; rq->r.path = path;
+	if (!m_thread.joinable())
+	{
+		// no engine thread: only the configuration of the next start changes
+		std::string err;
+		bool const ok = path.empty() ? slot == media_slot::cd
+			: slot == media_slot::cd ? runtime::check_cd_image(path, err) : slot == media_slot::hd ? runtime::check_hd_image(path, err) : runtime::check_rom_dir(path, err);
+		rq->r.ok = ok; rq->r.error = ok ? "" : err.empty() ? "no path given" : err;
+		if (ok) cfg_path(m_cfg.rt, slot) = path;
+		m_media_out.push(rq);
+	}
+	else m_media_in.push(rq);
+	++m_media_inflight;
+	return true;
+}
+
+bool engine::poll_media_result(media_result &out)
+{
+	media_request *rq;
+	if (!m_media_out.pop(rq)) return false;
+	--m_media_inflight;
+	out = std::move(rq->r);
+	delete rq;
+	if (out.ok) m_media_view[int(out.slot)] = out.path;
+	return true;
+}
+
+std::string engine::media_path(media_slot slot) const { return m_media_view[int(slot)]; }
+
+// engine thread
+void engine::apply_media(media_request &rq)
+{
+	media_result &r = rq.r;
+	std::string err;
+	if (r.slot == media_slot::cd)
+	{
+		if (r.path.empty()) { if (m_rt) m_rt->eject_cd(); r.ok = true; }
+		else r.ok = m_rt ? m_rt->mount_cd(r.path, err) : runtime::check_cd_image(r.path, err);
+	}
+	else if (r.path.empty()) err = std::string("no ") + (r.slot == media_slot::hd ? "hard disk image" : "ROM directory") + " given";
+	else r.ok = r.slot == media_slot::hd ? runtime::check_hd_image(r.path, err) : runtime::check_rom_dir(r.path, err);
+	r.error = r.ok ? "" : err;
+	if (!r.ok) return;
+	cfg_path(m_cfg.rt, r.slot) = r.path;
+	if (r.slot != media_slot::cd && m_power_state)
+	{
+		// the OS and its file system state live on the HD (and the boot code in the ROMs): restart like a power cycle
+		m_rt.reset();
+		std::string berr;
+		if (!boot(berr)) { r.error = berr; }
+		publish(m_rt != nullptr, berr.c_str());
+		r.restarted = true;
+	}
+}
 
 void engine::start(engine_config const &cfg)
 {
@@ -38,6 +109,7 @@ void engine::start(engine_config const &cfg)
 	if (m_latency > m_ring.capacity() / 2) m_latency = unsigned(m_ring.capacity() / 2);
 	m_quit = false;
 	m_primed = false;
+	for (media_slot sl : { media_slot::cd, media_slot::hd, media_slot::rom }) m_media_view[int(sl)] = cfg_path(m_cfg.rt, sl);
 	m_power_state = false;
 	m_last_pull_ns = 0;
 	m_thread = std::thread([this] { thread_main(); });
@@ -142,6 +214,13 @@ void engine::thread_main()
 			if (want) { std::string err; status = boot(err) ? "" : err; }
 			else { m_rt.reset(); status = "POWER OFF"; }
 			publish(m_rt != nullptr, status.c_str());
+		}
+		media_request *mq;
+		while (m_media_in.pop(mq))
+		{
+			apply_media(*mq);
+			if (mq->r.restarted) { status = mq->r.error; free_t0 = 0; }
+			while (!m_media_out.push(mq)) std::this_thread::sleep_for(std::chrono::milliseconds(1));   // bounded by m_media_inflight
 		}
 		panel_record pr;
 		if (!m_rt) while (m_panel.pop(pr)) { }       // no machine: switches do nothing

@@ -25,6 +25,22 @@ struct panel_input
 	uint16_t value;     // ADC: firmware units 0..0x7FFF
 };
 
+// removable / boot media of the emulated unit
+enum class media_slot : uint8_t { cd, hd, rom };
+char const *media_slot_name(media_slot s);          // "cd", "hd", "rom_dir"
+
+struct media_request;
+
+// outcome of an engine::set_media() request
+struct media_result
+{
+	media_slot slot = media_slot::cd;
+	bool ok = false;
+	bool restarted = false;         // the machine was restarted from power-on to use it (HD / ROM change while on)
+	std::string path;               // requested path ("" = CD ejected)
+	std::string error;              // why it was refused (the previous media stay)
+};
+
 struct engine_config
 {
 	runtime_config rt;
@@ -60,6 +76,15 @@ public:
 	bool powered() const { return m_power_req.load(); }
 	engine_stats stats() const;
 
+	// Media changes (main thread), applied on the engine thread between emulation steps (never on the audio thread):
+	//   cd  : hot swap like a real disc change; "" ejects.  The original OS sees UNIT ATTENTION / NOT READY.
+	//   hd, rom: the unit's boot media; a running machine restarts from power-on with them (the OS lives on the HD).
+	// Unusable images are refused and the current media stay.  Each request produces one media_result.
+	// Before start() (or after shutdown()) the change only updates the configuration the next start uses.
+	bool set_media(media_slot slot, std::string const &path);   // false: too many requests in flight (try later)
+	bool poll_media_result(media_result &out);                  // next completed request, if any
+	std::string media_path(media_slot slot) const;              // media in use as last reported (main thread view)
+
 	// ---- audio thread ----
 	unsigned latency() const { return m_latency; }
 	void set_realtime(bool rt) { m_realtime = rt; }  // offline (false): pull() waits for the engine
@@ -73,6 +98,7 @@ private:
 	bool boot(std::string &err);
 	void publish(bool running, char const *status);
 	void step();
+	void apply_media(media_request &rq);
 
 	engine_config m_cfg;
 	unsigned m_latency = 512;
@@ -89,6 +115,9 @@ private:
 	spsc_queue<midi_record> m_midi{4096};
 	spsc_queue<panel_record> m_panel{1024};
 	triple_buffer<panel_snapshot> m_snap;
+	spsc_queue<media_request *> m_media_in{16}, m_media_out{16};   // main -> engine -> main (ownership travels)
+	unsigned m_media_inflight = 0;           // main thread
+	std::string m_media_view[3];             // main thread: paths in use as last reported
 	panel_snapshot m_work{};
 
 	std::atomic<int64_t> m_last_pull_ns{0};

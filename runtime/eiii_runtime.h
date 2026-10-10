@@ -76,6 +76,15 @@ public:
 	void midi_in(uint8_t const *bytes, size_t n);         // bytes into the Z85230 channel A RxD at 31250 baud
 	void schedule_midi(double t_seconds, std::vector<uint8_t> bytes);   // scheduled MIDI (regressions)
 
+	// ---- media (SCSI ID 3 CD-ROM drive) ----
+	// A disc change as on the real drive: the next command after a mount reports UNIT ATTENTION (new medium), an empty
+	// drive reports NOT READY.  An image that cannot be used is refused and the current disc stays in the drive.
+	bool mount_cd(std::string const &path, std::string &error);
+	void eject_cd();
+	static bool check_cd_image(std::string const &path, std::string &error);   // readable MODE1/2048 ISO
+	static bool check_hd_image(std::string const &path, std::string &error);   // readable, non-empty, whole 512-byte sectors
+	static bool check_rom_dir(std::string const &dir, std::string &error);     // both boot ROM halves present
+
 	// ---- execution ----
 	void run_until_cycle(uint64_t cycle);                 // MAME-semantics slices until the CPU reaches 'cycle'
 	uint64_t cycles() const;
