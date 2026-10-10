@@ -25,6 +25,27 @@ struct panel_input
 	uint16_t value;     // ADC: firmware units 0..0x7FFF
 };
 
+// media / configuration changes of the emulated unit (engine::set_media, set_scsi)
+//   cd, hd : the unit's own drives (SCSI 3 CD-ROM, SCSI 1 OS hard disk)      rom: boot ROM folder
+//   scsi   : SCSI ID 1, 3 or an extra drive at 4..7 (Dn in the OS)                                  cem_model: "v1" | "v2" (analog model)
+//   restart: cold boot with the current configuration
+enum class media_slot : uint8_t { cd, hd, rom, scsi, cem_model, restart };
+char const *media_slot_name(media_slot s);          // "cd", "hd", "rom_dir", "scsi", "cem_model", "restart"
+
+struct media_request;
+
+// outcome of a set_media() / set_scsi() request
+struct media_result
+{
+	media_slot slot = media_slot::cd;
+	uint8_t scsi_id = 0;            // cd -> 3, hd -> 1, scsi -> the ID
+	scsi_kind kind = scsi_kind::none;
+	bool ok = false;
+	bool restarted = false;         // the machine was restarted from power-on to use it
+	std::string path;               // requested path / value ("" = CD ejected)
+	std::string error;              // why it was refused (the previous media stay)
+};
+
 struct engine_config
 {
 	runtime_config rt;
@@ -60,6 +81,20 @@ public:
 	bool powered() const { return m_power_req.load(); }
 	engine_stats stats() const;
 
+	// Media changes (main thread), applied on the engine thread between emulation steps (never on the audio thread):
+	//   a disc into / out of an existing CD drive: hot swap like a real disc change ("" ejects); the original OS sees
+	//   UNIT ATTENTION / NOT READY.
+	//   anything else (OS hard disk, other hard disks, adding / removing a drive, ROMs, analog model): the unit
+	//   restarts from power-on with the new configuration (the OS lives on the HD and finds its drives at boot).
+	// Unusable images are refused and the current media stay.  Each request produces one media_result.
+	// Before start() (or after shutdown()) the change only updates the configuration the next start uses.
+	bool set_media(media_slot slot, std::string const &path);   // false: too many requests in flight (try later)
+	bool set_scsi(unsigned scsi_id, scsi_kind kind, std::string const &path);   // ID 1: hd only, ID 3: cd only
+	bool poll_media_result(media_result &out);                  // next completed request, if any
+	// configuration in use as last reported (main thread view)
+	std::string media_path(media_slot slot) const;              // cd, hd, rom, cem_model
+	scsi_target scsi(unsigned scsi_id) const;                   // any ID 1..7
+
 	// ---- audio thread ----
 	unsigned latency() const { return m_latency; }
 	void set_realtime(bool rt) { m_realtime = rt; }  // offline (false): pull() waits for the engine
@@ -73,6 +108,8 @@ private:
 	bool boot(std::string &err);
 	void publish(bool running, char const *status);
 	void step();
+	bool queue_media(media_request *rq);
+	void apply_media(media_request &rq, bool live);
 
 	engine_config m_cfg;
 	unsigned m_latency = 512;
@@ -89,6 +126,9 @@ private:
 	spsc_queue<midi_record> m_midi{4096};
 	spsc_queue<panel_record> m_panel{1024};
 	triple_buffer<panel_snapshot> m_snap;
+	spsc_queue<media_request *> m_media_in{16}, m_media_out{16};   // main -> engine -> main (ownership travels)
+	unsigned m_media_inflight = 0;           // main thread
+	runtime_config m_view;                   // main thread: configuration in use as last reported
 	panel_snapshot m_work{};
 
 	std::atomic<int64_t> m_last_pull_ns{0};

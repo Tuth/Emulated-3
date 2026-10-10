@@ -5,6 +5,8 @@
 
 namespace eiii {
 
+static char const *const k_rom_lo = "e3-lsboot_ip381a_emu_systems_4088.ic3", *const k_rom_hi = "e3-msboot_ip380a_emu_systems_4088.ic4";
+
 void runtime::impl::bind()
 {
 	g_shim_sched = &sched;
@@ -29,7 +31,7 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 		for (size_t i = 0; i < n; ++i) m.rom[i] = lane ? u16((m.rom[i] & 0x00ff) | (b[i] << 8)) : u16((m.rom[i] & 0xff00) | b[i]);
 		return true;
 	};
-	if (!load("e3-lsboot_ip381a_emu_systems_4088.ic3", 0) || !load("e3-msboot_ip380a_emu_systems_4088.ic4", 1)) return false;
+	if (!load(k_rom_lo, 0) || !load(k_rom_hi, 1)) return false;
 
 	cpu = std::make_unique<ns32016_device>(mcfg, "maincpu", nullptr, 10'000'000);
 	fpu = std::make_unique<ns32081_device>(mcfg, "fpu", nullptr, 10'000'000);
@@ -60,6 +62,33 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	scsi->set_external_device(0, static_cast<nscsi_device_interface *>(hdc.get()));
 	scsi->set_external_device(1, static_cast<nscsi_device_interface *>(hd.get()));
 	scsi->set_external_device(3, static_cast<nscsi_device_interface *>(cd.get()));
+	// extra drives: same device classes as the unit's own HD / CD (the proven EIII SCSI timing)
+	std::vector<device_t *> extra_order;
+	for (unsigned id = 0; id < 8; ++id)
+	{
+		scsi_target const &t = cfg.scsi[id];
+		if (!scsi_extra_id(id) || t.kind == scsi_kind::none) continue;
+		extra_target &x = extra[id];
+		std::string const n = std::to_string(id);
+		if (t.kind == scsi_kind::hd)
+		{
+			x.hd.reset(eiii_make_hd(mcfg, ("harddisk" + n).c_str(), nullptr));
+			x.hd_img = std::make_unique<harddisk_image_device>(mcfg, "image", x.hd.get());
+			if (!x.hd_img->load(t.path)) { err = "cannot open hard disk image " + t.path + " (SCSI " + n + ")"; return false; }
+			scsi->set_external_device(int(id), static_cast<nscsi_device_interface *>(x.hd.get()));
+			extra_order.insert(extra_order.end(), { x.hd.get(), x.hd_img.get() });
+		}
+		else
+		{
+			x.cd.reset(eiii_make_cd(mcfg, ("cdrom" + n).c_str(), nullptr));
+			x.cd_img = std::make_unique<cdrom_image_device>(mcfg, "image", x.cd.get());
+			x.cdda = std::make_unique<cdda_device>(mcfg, "cdda", x.cd.get());
+			x.cd->set_block_size(512);
+			if (!t.path.empty() && !x.cd_img->load(t.path)) { err = "cannot open CD-ROM image " + t.path + " (SCSI " + n + ")"; return false; }
+			scsi->set_external_device(int(id), static_cast<nscsi_device_interface *>(x.cd.get()));
+			extra_order.insert(extra_order.end(), { x.cd.get(), x.cd_img.get(), x.cdda.get() });
+		}
+	}
 	hdc->irq_handler().set([mp](int s) { mp->irq_w(machine_t::HDINT, s); });
 
 	// PIT clocks as in the MAME driver: ch0 20 MHz/2, ch1 16 MHz/16, ch2 unclocked
@@ -83,7 +112,9 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	midi_timer = std::make_unique<emu_timer>([this](s32) { midi_tick(); });
 	scan_irq_timer = std::make_unique<emu_timer>([mp](s32) { if (mp->scan_count) mp->irq_w(machine_t::SCNINT, 0); });
 	m.scan_timer = scan_irq_timer.get();
-	order = { cpu.get(), fpu.get(), scsi.get(), hd.get(), hd_img.get(), cd.get(), cd_img.get(), cd_cdda.get(), hdc.get(), scc.get(), scc_cha.get(), scc_chb.get() };
+	order = { cpu.get(), fpu.get(), scsi.get(), hd.get(), hd_img.get(), cd.get(), cd_img.get(), cd_cdda.get() };
+	order.insert(order.end(), extra_order.begin(), extra_order.end());
+	order.insert(order.end(), { hdc.get(), scc.get(), scc_cha.get(), scc_chb.get() });
 	return true;
 }
 
@@ -143,6 +174,66 @@ void runtime::set_adc_input(unsigned input, uint16_t value) { if (input < 8) m->
 uint16_t runtime::adc_input(unsigned input) const { return input < 8 ? m->m.adc_pot[input] : 0; }
 void runtime::midi_in(uint8_t const *bytes, size_t n) { m->midi.q.insert(m->midi.q.end(), bytes, bytes + n); }
 void runtime::schedule_midi(double t, std::vector<uint8_t> bytes) { m->midi.ev.emplace_back(t, std::move(bytes)); }
+
+static bool file_size(std::string const &path, uint64_t &size, std::string &error, char const *what)
+{
+	FILE *f = fopen(path.c_str(), "rb");
+	if (!f) { error = std::string("cannot open ") + what + " " + path; return false; }
+	fseek(f, 0, SEEK_END); long const n = ftell(f); fclose(f);
+	if (n <= 0) { error = std::string(what) + " is empty or unreadable: " + path; return false; }
+	size = uint64_t(n);
+	return true;
+}
+bool runtime::check_cd_image(std::string const &path, std::string &error)
+{
+	uint64_t n;
+	if (!file_size(path, n, error, "CD-ROM image")) return false;
+	if (n % 2048) { error = "not a MODE1/2048 ISO image (size is not a multiple of 2048): " + path; return false; }
+	return true;
+}
+bool runtime::check_hd_image(std::string const &path, std::string &error)
+{
+	uint64_t n;
+	if (!file_size(path, n, error, "hard disk image")) return false;
+	if (n % 512) { error = "not a raw hard disk image (size is not a multiple of 512): " + path; return false; }
+	return true;
+}
+bool runtime::check_rom_dir(std::string const &dir, std::string &error)
+{
+	for (char const *name : { k_rom_lo, k_rom_hi })
+	{
+		uint64_t n;
+		if (!file_size(dir + "/" + name, n, error, "boot ROM")) return false;
+	}
+	return true;
+}
+
+bool runtime::mount_cd(std::string const &path, std::string &error) { return mount_cd(3, path, error); }
+void runtime::eject_cd() { eject_cd(3); }
+bool runtime::mount_cd(unsigned id, std::string const &path, std::string &error)
+{
+	cdrom_image_device *const img = m->cd_image(id);
+	if (!img) { error = "no CD-ROM drive at SCSI " + std::to_string(id); return false; }
+	if (!check_cd_image(path, error)) return false;
+	if (!img->load(path)) { error = "cannot open CD-ROM image " + path; return false; }   // load() bumps the media sequence
+	(id == 3 ? m->cfg.cd_path : m->cfg.scsi[id].path) = path;
+	return true;
+}
+bool runtime::eject_cd(unsigned id)
+{
+	cdrom_image_device *const img = m->cd_image(id);
+	if (!img) return false;
+	img->unload();
+	(id == 3 ? m->cfg.cd_path : m->cfg.scsi[id].path).clear();
+	return true;
+}
+scsi_kind runtime::drive_kind(unsigned id) const
+{
+	if (id == 1) return scsi_kind::hd;
+	if (id == 3) return scsi_kind::cd;
+	if (id >= 8) return scsi_kind::none;
+	return m->extra[id].hd ? scsi_kind::hd : m->extra[id].cd ? scsi_kind::cd : scsi_kind::none;
+}
 
 uint64_t runtime::cycles() const { return m->cpu ? uint64_t(m->cpu->total_cycles()) : 0; }
 double runtime::seconds() const { return double(cycles()) / cpu_hz; }

@@ -30,7 +30,7 @@ SRC_CORE  = ../fchip/eiii_fchip.cpp ../cem/eiii_cem3387.cpp ../cem/eiii_cem_cali
             ../cem/eiii_cem3387_v2.cpp ../host/eiii_backend.cpp ../runtime/eiii_runtime.cpp ../runtime/eiii_engine.cpp \
             ../panel/eiii_lcd.cpp ../panel/eiii_panel_model.cpp ../panel/eiii_panel_adapter.cpp
 # UI layer (software renderer, panel artwork) — linked by the GUI/plugin/tools only
-SRC_UI    = ../ui/raster.cpp ../ui/panel_view.cpp ../ui/x11_window.cpp ../ui/panel_window.cpp
+SRC_UI    = ../ui/raster.cpp ../ui/panel_view.cpp ../ui/panel_menu.cpp ../ui/x11_window.cpp ../ui/panel_window.cpp
 LDLIBS_X  = -lX11 -lXext
 SRC_MAME  = $(addprefix $(MAME)/src/, devices/cpu/ns32000/ns32000.cpp devices/cpu/ns32000/ns32000d.cpp devices/machine/ns32081.cpp \
             devices/machine/nscsi_bus.cpp devices/machine/ncr5380.cpp devices/machine/nscsi_hle.cpp devices/bus/nscsi/hd.cpp \
@@ -135,7 +135,7 @@ check: eiii-standalone
 	./check_runtime.sh
 	./check_audio.sh
 	./check_cem_v2.sh
-	$(MAKE) $(BUILD)/tests/lcd_mapping $(BUILD)/tests/panel_functional $(BUILD)/tests/engine_instances $(BUILD)/tests/display_themes $(BUILD)/tools/clap_host_test
+	$(MAKE) $(BUILD)/tests/lcd_mapping $(BUILD)/tests/panel_functional $(BUILD)/tests/engine_instances $(BUILD)/tests/display_themes $(BUILD)/tests/media_swap $(BUILD)/tools/clap_host_test
 	./check_panel_ui.sh
 
 clean:

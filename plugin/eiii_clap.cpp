@@ -7,18 +7,38 @@
 //
 // Media (never bundled): environment EIII_ROM_DIR / EIII_HD / EIII_CD, else ~/.config/eiii/eiii.conf
 //   rom_dir = /path/to/roms        hd = /path/to/EIII_OS242.hd        cd = /path/to/factory.iso
+//   scsi4 .. scsi7 = cd:/path/disc.iso | cd: (drive without a disc) | hd:/path/disk.img     (optional extra drives D4..D7)
 //   cem_model = v1|v2              autoload_bank = 44   autoload_drive = 3   autoload_preset = 1   (optional)
+// These are the defaults of a new instance; the media in use are saved in the CLAP state, so a project reopens with
+// its disks.  The menu bar above the panel shows the drives (D1 OS hard disk, D3 CD-ROM, extra drives D4..D7) and
+// changes them at runtime: a disc into / out of a CD drive is a hot swap (the OS sees a disc change); any other change
+// restarts the unit from power-on.  Clicking the floppy drive opens the D3 menu, its eject button ejects the CD.  File
+// choosers are a separate process (zenity or kdialog, or the program named by EIII_RACK_PICKER: called as
+// "PICKER cd|hd|rom START" and printing the chosen path) so no plugin thread ever waits for one.
 #include "clap/clap.h"
 #include "panel/eiii_panel_adapter.h"
 #include "runtime/eiii_engine.h"
 #include "standalone/ui_macro.h"
 #include "ui/panel_window.h"
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <dirent.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <memory>
+#include <spawn.h>
 #include <string>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <vector>
+
+extern char **environ;
 
 namespace {
 
@@ -38,9 +58,27 @@ clap_plugin_descriptor_t const k_desc = {
 
 struct media_config
 {
-	std::string rom_dir, hd, cd, cem_model = "v1";
+	std::string rom_dir, cem_model = "v1";
+	eiii::scsi_target scsi[8];      // [1] OS hard disk, [3] CD-ROM, [4..7] extra drives
+	std::string cd_last_dir;        // where the CD chooser opens when the drive is empty
 	int autoload_bank = -1, autoload_drive = 3, autoload_preset = -1;
+	std::string &hd() { return scsi[1].path; }
+	std::string &cd() { return scsi[3].path; }
+	media_config() { scsi[1].kind = eiii::scsi_kind::hd; scsi[3].kind = eiii::scsi_kind::cd; }
 };
+
+// "cd:/path", "cd:", "hd:/path", "none"
+bool parse_target(std::string const &v, eiii::scsi_target &t)
+{
+	if (v == "none" || v.empty()) { t = {}; return true; }
+	if (v.rfind("cd:", 0) == 0) { t = { eiii::scsi_kind::cd, v.substr(3) }; return true; }
+	if (v.rfind("hd:", 0) == 0 && v.size() > 3) { t = { eiii::scsi_kind::hd, v.substr(3) }; return true; }
+	return false;
+}
+std::string target_text(eiii::scsi_target const &t)
+{
+	return t.kind == eiii::scsi_kind::cd ? "cd:" + t.path : t.kind == eiii::scsi_kind::hd ? "hd:" + t.path : "none";
+}
 
 media_config read_media_config()
 {
@@ -56,17 +94,148 @@ media_config read_media_config()
 			if (eq == std::string::npos) continue;
 			auto trim = [](std::string v) { while (!v.empty() && isspace((unsigned char)v.back())) v.pop_back(); size_t i = 0; while (i < v.size() && isspace((unsigned char)v[i])) ++i; return v.substr(i); };
 			std::string const k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
-			if (k == "rom_dir") m.rom_dir = v; else if (k == "hd") m.hd = v; else if (k == "cd") m.cd = v; else if (k == "cem_model") m.cem_model = v;
+			if (k == "rom_dir") m.rom_dir = v; else if (k == "hd") m.hd() = v; else if (k == "cd") m.cd() = v; else if (k == "cem_model") m.cem_model = v;
+			else if (k.size() == 5 && k.rfind("scsi", 0) == 0 && eiii::scsi_extra_id(unsigned(k[4] - '0')))
+			{
+				if (!parse_target(v, m.scsi[k[4] - '0'])) fprintf(stderr, "EIII Rack: eiii.conf: %s = %s: use cd:/path, cd:, hd:/path or none\n", k.c_str(), v.c_str());
+			}
 			else if (k == "autoload_bank") m.autoload_bank = atoi(v.c_str()); else if (k == "autoload_drive") m.autoload_drive = atoi(v.c_str());
 			else if (k == "autoload_preset") m.autoload_preset = atoi(v.c_str());
 		}
 	}
 	auto env = [](char const *k, std::string &v) { if (char const *e = getenv(k)) v = e; };
-	env("EIII_ROM_DIR", m.rom_dir); env("EIII_HD", m.hd); env("EIII_CD", m.cd); env("EIII_CEM_MODEL", m.cem_model);
+	env("EIII_ROM_DIR", m.rom_dir); env("EIII_HD", m.hd()); env("EIII_CD", m.cd()); env("EIII_CEM_MODEL", m.cem_model);
 	if (char const *e = getenv("EIII_AUTOLOAD_BANK")) m.autoload_bank = atoi(e);
 	if (char const *e = getenv("EIII_AUTOLOAD_DRIVE")) m.autoload_drive = atoi(e);
 	if (char const *e = getenv("EIII_AUTOLOAD_PRESET")) m.autoload_preset = atoi(e);
 	return m;
+}
+
+bool file_exists(std::string const &p) { struct stat st; return !p.empty() && stat(p.c_str(), &st) == 0; }
+std::string base_name(std::string const &p) { auto const s = p.find_last_of('/'); return s == std::string::npos ? p : p.substr(s + 1); }
+std::string dir_name(std::string const &p) { auto const s = p.find_last_of('/'); return s == std::string::npos ? std::string() : p.substr(0, s + 1); }
+bool in_path(char const *prog)
+{
+	char const *path = getenv("PATH");
+	std::string const ps = path ? path : "/usr/bin:/bin";
+	for (size_t pos = 0; pos <= ps.size();)
+	{
+		size_t e = ps.find(':', pos); if (e == std::string::npos) e = ps.size();
+		std::string const f = ps.substr(pos, e - pos) + "/" + prog;
+		if (e > pos && access(f.c_str(), X_OK) == 0) return true;
+		pos = e + 1;
+	}
+	return false;
+}
+
+// One chooser dialog as a child process; its stdout (the choice) is collected without blocking.  [main-thread]
+struct picker
+{
+	pid_t pid = -1;
+	int fd = -1;
+	std::string out;
+	bool running() const { return pid > 0 || fd >= 0; }
+	bool start(std::vector<std::string> const &args)
+	{
+		if (running() || args.empty()) return false;
+		int p[2];
+		if (pipe2(p, O_CLOEXEC) != 0) return false;
+		posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+		posix_spawn_file_actions_adddup2(&fa, p[1], 1);
+		std::vector<char *> av; for (auto const &a : args) av.push_back(const_cast<char *>(a.c_str())); av.push_back(nullptr);
+		pid_t child;
+		int const rc = posix_spawnp(&child, av[0], &fa, nullptr, av.data(), environ);
+		posix_spawn_file_actions_destroy(&fa);
+		close(p[1]);
+		if (rc != 0) { close(p[0]); return false; }
+		fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL) | O_NONBLOCK);
+		pid = child; fd = p[0]; out.clear();
+		return true;
+	}
+	// true once the dialog has closed; `result` = its first output line ("" = cancelled)
+	bool poll(std::string &result)
+	{
+		if (fd >= 0)
+		{
+			char b[512];
+			for (;;)
+			{
+				ssize_t const n = read(fd, b, sizeof b);
+				if (n > 0) { out.append(b, size_t(n)); if (out.size() > 8192) out.resize(8192); continue; }
+				if (n == 0 || (errno != EAGAIN && errno != EINTR)) { close(fd); fd = -1; }
+				break;
+			}
+		}
+		if (pid > 0)
+		{
+			int st;
+			pid_t const r = waitpid(pid, &st, WNOHANG);
+			if (r == pid || (r < 0 && errno == ECHILD)) pid = -1;   // ECHILD: the host reaps children itself
+		}
+		if (running()) return false;
+		result = out.substr(0, out.find('\n'));
+		return true;
+	}
+	void cancel()
+	{
+		if (pid > 0) { kill(pid, SIGTERM); waitpid(pid, nullptr, 0); pid = -1; }
+		if (fd >= 0) { close(fd); fd = -1; }
+	}
+	~picker() { cancel(); }
+};
+
+// argv of a file chooser: what = "cd" / "hd" (prints a file path) or "rom" (prints a folder), start = folder/file
+std::vector<std::string> picker_args(std::string const &what, std::string const &start)
+{
+	if (char const *custom = getenv("EIII_RACK_PICKER")) return { custom, what, start };
+	std::string const title = what == "cd" ? "EIII Rack - CD-ROM image" : what == "hd" ? "EIII Rack - hard disk image" : "EIII Rack - boot ROM folder";
+	if (in_path("zenity"))
+	{
+		std::vector<std::string> a = { "zenity", "--file-selection", "--title=" + title };
+		if (!start.empty()) a.push_back("--filename=" + start);
+		if (what == "rom") { a.push_back("--directory"); return a; }
+		a.push_back(what == "cd" ? "--file-filter=CD-ROM images (*.iso) | *.iso *.ISO *.Iso" : "--file-filter=Hard disk images | *.iso *.ISO *.hd *.HD *.img *.IMG *.hda *.raw");
+		a.push_back("--file-filter=All files | *");
+		return a;
+	}
+	if (in_path("kdialog"))
+	{
+		if (what == "rom") return { "kdialog", "--title", title, "--getexistingdirectory", start.empty() ? "." : start };
+		return { "kdialog", "--title", title, "--getopenfilename", start.empty() ? "." : start,
+			what == "cd" ? "*.iso *.ISO|CD-ROM images (*.iso)\n*|All files" : "*.iso *.ISO *.hd *.HD *.img *.IMG *.hda *.raw|Hard disk images\n*|All files" };
+	}
+	return {};
+}
+
+// CD images next to the ones in use (quick list in the drive menus), sorted, at most `max`
+std::vector<std::string> nearby_images(std::vector<std::string> const &dirs, size_t max)
+{
+	std::vector<std::string> out;
+	for (auto const &d : dirs)
+	{
+		if (d.empty()) continue;
+		DIR *dp = opendir(d.c_str());
+		if (!dp) continue;
+		while (dirent *e = readdir(dp))
+		{
+			std::string const n = e->d_name;
+			if (n.size() < 5 || n[0] == '.') continue;
+			std::string ext = n.substr(n.size() - 4); for (char &ch : ext) ch = char(tolower((unsigned char)ch));
+			if (ext != ".iso") continue;
+			std::string const full = d + (d.back() == '/' ? "" : "/") + n;
+			if (std::find(out.begin(), out.end(), full) == out.end()) out.push_back(full);
+		}
+		closedir(dp);
+	}
+	std::sort(out.begin(), out.end());
+	if (out.size() > max) out.resize(max);
+	return out;
+}
+std::string disc_name(std::string const &p)
+{
+	std::string n = base_name(p);
+	if (n.size() > 4) { std::string ext = n.substr(n.size() - 4); for (char &ch : ext) ch = char(tolower((unsigned char)ch)); if (ext == ".iso") n.resize(n.size() - 4); }
+	return n;
 }
 
 struct instance
@@ -93,6 +262,11 @@ struct instance
 	bool want_shown = true;
 	ui_macro macro;
 	bool macro_running = false;
+	picker pick;
+	std::string pick_what;           // "" idle, "cd", "hd", "rom"
+	unsigned pick_id = 0;            // SCSI ID the chosen image goes to
+	std::string media_msg;           // transient message in the menu bar (refused image, no chooser)
+	std::chrono::steady_clock::time_point media_msg_until;
 
 	static instance *of(clap_plugin_t const *p) { return static_cast<instance *>(p->plugin_data); }
 
@@ -127,9 +301,156 @@ struct instance
 		macro_running = !macro.empty();
 	}
 
+	void show_media_message(std::string const &m)
+	{
+		media_msg = m; media_msg_until = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+		fprintf(stderr, "EIII Rack: %s\n", m.c_str());
+	}
+	void update_menu_status()
+	{
+		if (!media_msg.empty() && std::chrono::steady_clock::now() >= media_msg_until) media_msg.clear();
+		if (win) win->view().set_menu_status(!media_msg.empty() ? media_msg : pick.running() ? "choosing a file\xE2\x80\xA6" : "");
+	}
+	void dirty() { if (host_state) host_state->mark_dirty(host); }
+
+	// [main-thread] requests (validated and applied by the engine; outcome in poll_media())
+	void change_scsi(unsigned id, eiii::scsi_kind kind, std::string const &path)
+	{
+		if (!eng.set_scsi(id, kind, path)) show_media_message("busy: try again");
+	}
+	void change_setting(eiii::media_slot sl, std::string const &value)
+	{
+		if (!eng.set_media(sl, value)) show_media_message("busy: try again");
+	}
+	void poll_media()
+	{
+		eiii::media_result r;
+		while (eng.poll_media_result(r))
+		{
+			if (!r.ok) { show_media_message(r.error); continue; }
+			bool changed = false;
+			auto set = [&](std::string &f, std::string const &v) { if (f != v) { f = v; changed = true; } };
+			if (r.slot == eiii::media_slot::scsi && r.scsi_id < 8)
+			{
+				eiii::scsi_target &t = media.scsi[r.scsi_id];
+				if (t.kind == eiii::scsi_kind::cd && !t.path.empty()) media.cd_last_dir = dir_name(t.path);
+				if (t.kind != r.kind) { t.kind = r.kind; changed = true; }
+				set(t.path, r.kind == eiii::scsi_kind::none ? std::string() : r.path);
+			}
+			else if (r.slot == eiii::media_slot::rom) set(media.rom_dir, r.path);
+			else if (r.slot == eiii::media_slot::cem_model) set(media.cem_model, r.path);
+			if (changed) dirty();
+			if (r.restarted && !r.error.empty()) show_media_message(r.error);
+			else if (r.restarted) setup_macro();       // a fresh power-on: the optional autoload runs again
+		}
+		std::string choice;
+		if (!pick_what.empty() && pick.poll(choice))
+		{
+			std::string const what = pick_what;
+			pick_what.clear();
+			if (choice.empty()) { }                    // cancelled
+			else if (what == "rom") change_setting(eiii::media_slot::rom, choice);
+			else change_scsi(pick_id, what == "cd" ? eiii::scsi_kind::cd : eiii::scsi_kind::hd, choice);
+		}
+		update_menu_status();
+	}
+	void open_picker(std::string const &what, unsigned id)
+	{
+		if (pick.running()) { show_media_message("a file chooser is already open"); return; }
+		std::string cur;
+		if (what == "rom") cur = media.rom_dir;
+		else if (id < 8 && media.scsi[id].kind != eiii::scsi_kind::none && !media.scsi[id].path.empty()) cur = media.scsi[id].path;
+		else if (what == "cd") cur = media.cd_last_dir.empty() ? dir_name(media.cd()) : media.cd_last_dir;
+		else cur = dir_name(media.hd());
+		auto const args = picker_args(what, cur);
+		if (args.empty()) { show_media_message("no file chooser: install zenity or kdialog (or set paths in eiii.conf)"); return; }
+		if (!pick.start(args)) { show_media_message("cannot start " + args[0]); return; }
+		pick_what = what; pick_id = id;
+		update_menu_status();
+	}
+	void on_drive_click(bool eject, float lx, float ly)
+	{
+		if (eject) { if (!media.cd().empty()) change_scsi(3, eiii::scsi_kind::cd, ""); return; }
+		if (win) win->view().open_menu_at(win->view().find_menu("d3"), lx, ly);
+	}
+
+	// ---- menu bar ----
+	std::string drive_title(unsigned id)
+	{
+		eiii::scsi_target const &t = media.scsi[id];
+		std::string const d = "D" + std::to_string(id) + "  ";
+		if (t.kind == eiii::scsi_kind::none) return d + "\xE2\x80\x94";
+		if (t.kind == eiii::scsi_kind::hd) return d + "HD  " + base_name(t.path);
+		return d + "CD  " + (t.path.empty() ? std::string("(no disc)") : disc_name(t.path));
+	}
+	std::vector<eiii::ui::menu_item> drive_items(unsigned id)
+	{
+		using eiii::ui::menu_item;
+		std::vector<menu_item> v;
+		auto item = [&](std::string label, std::function<void()> f, bool enabled = true, bool checked = false) { menu_item m; m.label = std::move(label); m.action = std::move(f); m.enabled = enabled; m.checked = checked; v.push_back(m); };
+		eiii::scsi_target const t = media.scsi[id];
+		std::string const sid = "SCSI " + std::to_string(id) + " \xC2\xB7 ";
+		bool const extra = eiii::scsi_extra_id(id);
+		if (t.kind == eiii::scsi_kind::none)
+		{
+			v.push_back(menu_item::info(sid + "nothing connected (changes restart the unit)"));
+			item("Add CD-ROM drive with a disc\xE2\x80\xA6", [this, id] { open_picker("cd", id); });
+			item("Add empty CD-ROM drive", [this, id] { change_scsi(id, eiii::scsi_kind::cd, ""); });
+			item("Add hard disk image\xE2\x80\xA6", [this, id] { open_picker("hd", id); });
+			return v;
+		}
+		if (t.kind == eiii::scsi_kind::hd)
+		{
+			v.push_back(menu_item::info(sid + (id == 1 ? "OS hard disk \xC2\xB7 " : "hard disk \xC2\xB7 ") + t.path));
+			item(id == 1 ? "Change OS hard disk image\xE2\x80\xA6 (restarts)" : "Change hard disk image\xE2\x80\xA6 (restarts)", [this, id] { open_picker("hd", id); });
+		}
+		else
+		{
+			v.push_back(menu_item::info(sid + "CD-ROM \xC2\xB7 " + (t.path.empty() ? std::string("no disc") : t.path)));
+			item(t.path.empty() ? "Insert disc\xE2\x80\xA6" : "Change disc\xE2\x80\xA6", [this, id] { open_picker("cd", id); });
+			item("Eject", [this, id] { change_scsi(id, eiii::scsi_kind::cd, ""); }, !t.path.empty());
+			std::vector<std::string> dirs;
+			for (unsigned k = 1; k < 8; ++k) if (media.scsi[k].kind == eiii::scsi_kind::cd && !media.scsi[k].path.empty()) dirs.push_back(dir_name(media.scsi[k].path));
+			dirs.push_back(media.cd_last_dir);
+			auto const near = nearby_images(dirs, 16);
+			if (!near.empty()) v.push_back(menu_item::sep());
+			for (auto const &f : near) item(disc_name(f), [this, id, f] { change_scsi(id, eiii::scsi_kind::cd, f); }, true, f == t.path);
+		}
+		if (extra) { v.push_back(menu_item::sep()); item("Remove drive (restarts)", [this, id] { change_scsi(id, eiii::scsi_kind::none, ""); }); }
+		return v;
+	}
+	std::vector<eiii::ui::menu_item> settings_items()
+	{
+		using eiii::ui::menu_item;
+		std::vector<menu_item> v;
+		auto item = [&](std::string label, std::function<void()> f, bool checked = false) { menu_item m; m.label = std::move(label); m.action = std::move(f); m.checked = checked; v.push_back(m); };
+		item("Power", [this] { eng.power(!eng.powered()); dirty(); }, eng.powered());
+		item("Restart (cold boot)", [this] { change_setting(eiii::media_slot::restart, ""); });
+		v.push_back(menu_item::sep());
+		item("Analog model V1 (MAME-matched)", [this] { change_setting(eiii::media_slot::cem_model, "v1"); }, media.cem_model != "v2");
+		item("Analog model V2 (CEM3387 circuit model)", [this] { change_setting(eiii::media_slot::cem_model, "v2"); }, media.cem_model == "v2");
+		v.push_back(menu_item::sep());
+		char const *const theme_label[] = { "Display: Stock LCD", "Display: Blue / white", "Display: Amber / red", "Display: VFD", "Display: OLED" };
+		for (int k = 0; k < eiii::lcd_theme_count; ++k)
+			item(theme_label[k], [this, k] { ui->set_display_theme(eiii::lcd_theme(k)); }, int(ui->display_theme()) == k);
+		v.push_back(menu_item::sep());
+		item("Boot ROM folder\xE2\x80\xA6 (restarts)", [this] { open_picker("rom", 0); });
+		v.push_back(menu_item::info(media.rom_dir.empty() ? std::string("no ROM folder set") : media.rom_dir));
+		return v;
+	}
+	std::vector<eiii::ui::menu> build_menus()
+	{
+		std::vector<eiii::ui::menu> m;
+		m.push_back({ "settings", [] { return std::string("Settings"); }, [this] { return settings_items(); } });
+		for (unsigned id : { 1u, 3u, 4u, 5u, 6u, 7u })
+			m.push_back({ "d" + std::to_string(id), [this, id] { return drive_title(id); }, [this, id] { return drive_items(id); } });
+		return m;
+	}
+
 	// [main-thread] periodic: GUI events/redraw, operator macro
 	void on_timer()
 	{
+		poll_media();
 		if (win && win->is_open()) win->tick(); else if (ui) ui->poll();
 		if (ui)
 		{
@@ -184,8 +505,9 @@ clap_plugin_timer_support_t const k_timer = { timer_on };
 void fd_on(clap_plugin_t const *p, int, clap_posix_fd_flags_t) { instance *const s = instance::of(p); if (s->win && s->win->is_open()) s->win->tick(); }
 clap_plugin_posix_fd_support_t const k_fd = { fd_on };
 
-// state: host-UI settings only (slider positions, display theme + per-theme Contrast level, power).  The emulated machine itself starts from power-on
-// like the hardware (banks are loaded from disk through the panel, optionally by the autoload operator macro).
+// state: host-UI settings (slider positions, display theme + per-theme Contrast level, power) and the media in use
+// ("media rom_dir|hd|cd PATH", cd "" = no disc).  The emulated machine itself starts from power-on like the hardware
+// (banks are loaded from disk through the panel, optionally by the autoload operator macro).
 bool state_save(clap_plugin_t const *p, clap_ostream_t const *out)
 {
 	instance *const s = instance::of(p);
@@ -195,6 +517,12 @@ bool state_save(clap_plugin_t const *p, clap_ostream_t const *out)
 		if (eiii::panel_controls[i].kind == eiii::panel_kind::slider) { snprintf(line, sizeof line, "slider %s %.6f\n", eiii::panel_controls[i].id, s->ui->slider(int(i))); t += line; }
 	t += s->saved_display = s->ui->display_state();
 	snprintf(line, sizeof line, "power %d\n", s->eng.powered() ? 1 : 0); t += line;
+	auto media_line = [&](std::string const &k, std::string const &v) { if (v.find('\n') == std::string::npos) t += "media " + k + " " + v + "\n"; };
+	media_line("rom_dir", s->media.rom_dir);
+	media_line("hd", s->media.hd());
+	media_line("cd", s->media.cd());
+	for (unsigned id = 4; id < 8; ++id) media_line("scsi" + std::to_string(id), target_text(s->media.scsi[id]));
+	media_line("cem_model", s->media.cem_model);
 	size_t done = 0;
 	while (done < t.size()) { int64_t const n = out->write(out, t.data() + done, t.size() - done); if (n <= 0) return false; done += size_t(n); }
 	return true;
@@ -215,6 +543,32 @@ bool state_load(clap_plugin_t const *p, clap_istream_t const *in)
 		if (sscanf(ln.c_str(), "slider %63s %lf", id, &v) == 2) s->ui->set_slider(eiii::panel_find_control(id), v);
 		else if (s->ui->apply_display_state_line(ln.c_str())) { }
 		else if (sscanf(ln.c_str(), "power %d", &pw) == 1) s->eng.power(pw != 0);
+		else if (ln.rfind("media ", 0) == 0)
+		{
+			std::string const rest = ln.substr(6);
+			auto const sp = rest.find(' ');
+			std::string const key = rest.substr(0, sp), val = sp == std::string::npos ? std::string() : rest.substr(sp + 1);
+			bool const live = s->eng.started();
+			// a project from another machine whose disks are not here keeps this machine's defaults
+			auto missing = [&](std::string const &path) { if (path.empty() || file_exists(path)) return false; fprintf(stderr, "EIII Rack: saved %s not found, keeping the current setting\n", path.c_str()); return true; };
+			if (key == "rom_dir" && !val.empty() && val != s->media.rom_dir && !missing(val))
+			{ if (live) s->change_setting(eiii::media_slot::rom, val); else s->media.rom_dir = val; }
+			else if (key == "cem_model" && (val == "v1" || val == "v2") && val != s->media.cem_model)
+			{ if (live) s->change_setting(eiii::media_slot::cem_model, val); else s->media.cem_model = val; }
+			else if ((key == "hd" || key == "cd") && !missing(val))
+			{
+				unsigned const id = key == "hd" ? 1 : 3;
+				if ((id == 1 && val.empty()) || val == s->media.scsi[id].path) continue;
+				if (live) s->change_scsi(id, id == 1 ? eiii::scsi_kind::hd : eiii::scsi_kind::cd, val); else s->media.scsi[id].path = val;
+			}
+			else if (key.size() == 5 && key.rfind("scsi", 0) == 0 && eiii::scsi_extra_id(unsigned(key[4] - '0')))
+			{
+				unsigned const id = unsigned(key[4] - '0');
+				eiii::scsi_target t;
+				if (!parse_target(val, t) || missing(t.path) || (t.kind == s->media.scsi[id].kind && t.path == s->media.scsi[id].path)) continue;
+				if (live) s->change_scsi(id, t.kind, t.path); else s->media.scsi[id] = t;
+			}
+		}
 	}
 	s->saved_display = s->ui->display_state();
 	return true;
@@ -230,7 +584,9 @@ bool gui_create(clap_plugin_t const *p, char const *api, bool is_floating)
 	if (is_floating || strcmp(api, CLAP_WINDOW_API_X11) || s->win) return false;
 	s->win = std::make_unique<eiii::ui::panel_window>(*s->ui);
 	s->win->keyboard_shortcuts = false;              // the host owns the keyboard
-	if (!s->gui_w) eiii::ui::panel_view::preferred_size(100.0 * s->gui_scale, s->gui_w, s->gui_h);
+	s->win->view().set_menus(s->build_menus());
+	s->win->view().on_drive_click = [s](bool eject, float lx, float ly) { s->on_drive_click(eject, lx, ly); };
+	if (!s->gui_w) eiii::ui::panel_view::preferred_size(100.0 * s->gui_scale, s->gui_w, s->gui_h, true);
 	return true;
 }
 void gui_destroy(clap_plugin_t const *p)
@@ -245,7 +601,7 @@ bool gui_set_scale(clap_plugin_t const *p, double scale)
 {
 	instance *const s = instance::of(p);
 	s->gui_scale = scale > 0 ? scale : 1.0;
-	if (!s->win || !s->win->is_open()) eiii::ui::panel_view::preferred_size(100.0 * s->gui_scale, s->gui_w, s->gui_h);
+	if (!s->win || !s->win->is_open()) eiii::ui::panel_view::preferred_size(100.0 * s->gui_scale, s->gui_w, s->gui_h, true);
 	return true;
 }
 bool gui_get_size(clap_plugin_t const *p, uint32_t *w, uint32_t *h)
@@ -259,12 +615,12 @@ bool gui_get_resize_hints(clap_plugin_t const *, clap_gui_resize_hints_t *h)
 {
 	h->can_resize_horizontally = h->can_resize_vertically = true;
 	h->preserve_aspect_ratio = true;
-	h->aspect_ratio_width = uint32_t(eiii::ui::panel_w); h->aspect_ratio_height = uint32_t(eiii::ui::panel_h);
+	h->aspect_ratio_width = uint32_t(eiii::ui::panel_w); h->aspect_ratio_height = uint32_t(eiii::ui::panel_view::total_h(true));
 	return true;
 }
 bool gui_adjust_size(clap_plugin_t const *, uint32_t *w, uint32_t *h)
 {
-	double const ar = double(eiii::ui::panel_w) / eiii::ui::panel_h;
+	double const ar = double(eiii::ui::panel_w) / eiii::ui::panel_view::total_h(true);
 	uint32_t const minw = 368;                       // 25 %
 	uint32_t nw = std::max(*w, minw), nh = uint32_t(std::lround(nw / ar));
 	if (nh > *h && *h >= uint32_t(minw / ar)) { nh = *h; nw = uint32_t(std::lround(nh * ar)); }
@@ -328,6 +684,7 @@ void p_destroy(clap_plugin_t const *p)
 		}
 	}
 	gui_destroy(p);
+	s->pick.cancel();
 	if (s->timer != CLAP_INVALID_ID && s->host_timer) s->host_timer->unregister_timer(s->host, s->timer);
 	s->eng.shutdown();
 	delete s;
@@ -340,7 +697,8 @@ bool p_activate(clap_plugin_t const *p, double sample_rate, uint32_t, uint32_t m
 	if (!s->eng.started() || sample_rate != s->sample_rate || max_frames > s->max_frames)
 	{
 		eiii::engine_config c;
-		c.rt.rom_dir = s->media.rom_dir; c.rt.hd_path = s->media.hd; c.rt.cd_path = s->media.cd; c.rt.cem_model = s->media.cem_model;
+		c.rt.rom_dir = s->media.rom_dir; c.rt.hd_path = s->media.hd(); c.rt.cd_path = s->media.cd(); c.rt.cem_model = s->media.cem_model;
+		for (unsigned id = 4; id < 8; ++id) c.rt.scsi[id] = s->media.scsi[id];
 		c.rt.sample_rate = sample_rate;
 		c.max_block = std::max<uint32_t>(max_frames, 64);
 		c.realtime = true;

@@ -27,6 +27,16 @@ struct runtime::impl
 	std::unique_ptr<nscsi_cdrom_device> cd;
 	std::unique_ptr<cdrom_image_device> cd_img;
 	std::unique_ptr<cdda_device> cd_cdda;
+	// extra targets (IDs 4..7), present only when configured
+	struct extra_target
+	{
+		std::unique_ptr<nscsi_harddisk_device> hd;
+		std::unique_ptr<harddisk_image_device> hd_img;
+		std::unique_ptr<nscsi_cdrom_device> cd;
+		std::unique_ptr<cdrom_image_device> cd_img;
+		std::unique_ptr<cdda_device> cdda;
+	} extra[8];
+	cdrom_image_device *cd_image(unsigned id) { return id == 3 ? cd_img.get() : id < 8 ? extra[id].cd_img.get() : nullptr; }
 	std::unique_ptr<ncr5380_device> hdc;
 	std::unique_ptr<scc85230_device> scc;
 	std::unique_ptr<z80scc_channel> scc_cha, scc_chb;

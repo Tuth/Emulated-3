@@ -26,6 +26,9 @@ rgba const c_letterbox = rgba::hex(0x141414);
 
 // LCD geometry (panel units): window and 5x8 dot grid of the 4 x 20 module
 float const lcd_x0 = 147.5f, lcd_y0 = 82.5f, lcd_x1 = 378.f, lcd_y1 = 155.5f;
+// floppy drive: whole unit and its eject button (host UI click targets)
+float const drv_x0 = 112.f, drv_y0 = 419.f, drv_x1 = 413.f, drv_y1 = 510.f;
+float const ej_x0 = 350.f, ej_y0 = 470.f, ej_x1 = 382.f, ej_y1 = 494.f;
 float const dot_pitch = 1.85f, dot_size = 1.62f, char_pitch_x = 11.0f, char_pitch_y = 17.0f;
 
 } // namespace
@@ -114,14 +117,20 @@ panel_view::panel_view()
 	m_drawn.resize(m_elements.size());
 }
 
-void panel_view::preferred_size(double pct, int &w, int &h) { w = int(std::lround(panel_w * pct / 100.0)); h = int(std::lround(panel_h * pct / 100.0)); }
+void panel_view::preferred_size(double pct, int &w, int &h) { preferred_size(pct, w, h, false); }
+void panel_view::preferred_size(double pct, int &w, int &h, bool menu_bar)
+{
+	w = int(std::lround(panel_w * pct / 100.0)); h = int(std::lround(total_h(menu_bar) * pct / 100.0));
+}
 
 void panel_view::set_size(int w, int h)
 {
 	if (w == m_w && h == m_h && m_static_ok) return;
 	m_w = std::max(w, 16); m_h = std::max(h, 16);
-	m_s = std::min(m_w / panel_w, m_h / panel_h);
-	m_xf = { m_s, (m_w - panel_w * m_s) * .5f, (m_h - panel_h * m_s) * .5f };
+	float const bar = has_menu_bar() ? menu_bar_h : 0.f;
+	m_s = std::min(m_w / panel_w, m_h / (panel_h + bar));
+	m_xf = { m_s, (m_w - panel_w * m_s) * .5f, (m_h - (panel_h + bar) * m_s) * .5f + bar * m_s };
+	m_menu_dirty = true;
 	m_static.resize(m_w, m_h);
 	draw_static(m_static);
 	m_static_ok = true;
@@ -486,6 +495,7 @@ void panel_view::draw_lcd_glow(canvas &c, lcd_look const &L, LIT lit_dot, DX dot
 recti panel_view::render(canvas &frame, panel_adapter &ui, bool full)
 {
 	if (frame.w != m_w || frame.h != m_h) { frame.resize(m_w, m_h); full = true; }
+	if (m_menu_dirty) { full = true; m_menu_dirty = false; }
 	recti dirty{};
 	if (full) { frame.copy_from(m_static, { 0, 0, m_w, m_h }); dirty = { 0, 0, m_w, m_h }; for (auto &d : m_drawn) d.valid = false; }
 	// LCD key: dots + power + contrast
@@ -520,6 +530,23 @@ recti panel_view::render(canvas &frame, panel_adapter &ui, bool full)
 		m_drawn[i] = { true, key };
 		dirty = unite(dirty, r);
 	}
+	if (has_menu_bar())
+	{
+		// the bar shows live titles (media in use): redraw it when any title or the status changed
+		std::vector<bar_slot> slots; layout_bar(slots);
+		uint64_t key = 1469598103934665603ull;
+		auto mixs = [&](std::string const &t) { for (char ch : t) { key ^= uint8_t(ch); key *= 1099511628211ull; } key ^= 0xff; key *= 1099511628211ull; };
+		for (auto const &b : slots) mixs(b.title);
+		mixs(m_menu_status); key ^= uint64_t(m_open + 2) * 0x9e3779b97f4a7c15ull;
+		if (full || key != m_bar_key) { m_bar = slots; m_bar_key = key; draw_bar(frame, m_bar); dirty = unite(dirty, bar_rect()); }
+		// the open menu stays on top of anything redrawn underneath
+		if (m_open >= 0)
+		{
+			recti const d = dropdown_rect();
+			recti const x{ std::max(d.x0, dirty.x0), std::max(d.y0, dirty.y0), std::min(d.x1, dirty.x1), std::min(d.y1, dirty.y1) };
+			if (full || !x.empty()) { draw_dropdown(frame); dirty = unite(dirty, d); }
+		}
+	}
 	dirty.x0 = std::max(dirty.x0, 0); dirty.y0 = std::max(dirty.y0, 0); dirty.x1 = std::min(dirty.x1, m_w); dirty.y1 = std::min(dirty.y1, m_h);
 	return dirty;
 }
@@ -552,9 +579,15 @@ bool panel_view::control_center(int control, float &lx, float &ly) const
 void panel_view::mouse_down(float x, float y, int button, panel_adapter &ui)
 {
 	if (button != 1 || m_capture >= 0) return;
+	if (has_menu_bar()) { float mx = (x - m_xf.ox) / m_xf.s, my = (y - m_xf.oy) / m_xf.s; if (menu_mouse_down(mx, my)) return; }
 	float lx, ly; if (!to_logical(x, y, lx, ly)) return;
 	int const c = hit_test(lx, ly);
-	if (c < 0) return;
+	if (c < 0)
+	{
+		if (on_drive_click && lx >= drv_x0 && lx <= drv_x1 && ly >= drv_y0 && ly <= drv_y1)
+			on_drive_click(lx >= ej_x0 && lx <= ej_x1 && ly >= ej_y0 && ly <= ej_y1, lx, ly);
+		return;
+	}
 	m_capture = c;
 	panel_control const &k = panel_controls[c];
 	if (k.kind == panel_kind::button) { ui.press_button(c); return; }
@@ -572,6 +605,7 @@ void panel_view::mouse_down(float x, float y, int button, panel_adapter &ui)
 
 void panel_view::mouse_move(float x, float y, panel_adapter &ui)
 {
+	if (m_capture < 0 && has_menu_bar()) { menu_mouse_move((x - m_xf.ox) / m_xf.s, (y - m_xf.oy) / m_xf.s); return; }
 	if (m_capture < 0) return;
 	float lx, ly; to_logical(x, y, lx, ly);
 	panel_control const &k = panel_controls[m_capture];
@@ -591,6 +625,7 @@ void panel_view::mouse_move(float x, float y, panel_adapter &ui)
 
 void panel_view::mouse_up(float x, float y, int button, panel_adapter &ui)
 {
+	if (button == 1 && m_capture < 0 && has_menu_bar()) { menu_mouse_up((x - m_xf.ox) / m_xf.s, (y - m_xf.oy) / m_xf.s); return; }
 	if (button != 1 || m_capture < 0) return;
 	mouse_move(x, y, ui);
 	if (panel_controls[m_capture].kind == panel_kind::button) ui.release_button(m_capture);
@@ -609,6 +644,7 @@ void panel_view::wheel(float x, float y, int steps, panel_adapter &ui)
 
 void panel_view::focus_lost(panel_adapter &ui)
 {
+	close_menu();
 	if (m_capture >= 0 && panel_controls[m_capture].kind == panel_kind::button) ui.release_button(m_capture);
 	m_capture = -1;
 }
