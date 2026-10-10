@@ -57,8 +57,8 @@ int main(int argc, char **argv)
 		menus.push_back({ "settings", fixed("Settings"), [] { std::vector<menu_item> v; menu_item p; p.label = "Power"; p.checked = true; v.push_back(p);
 			v.push_back({ "Restart (cold boot)" }); v.push_back(menu_item::sep()); menu_item a; a.label = "Analog model V1"; a.checked = true; v.push_back(a);
 			v.push_back({ "Analog model V2" }); return v; } });
-		menus.push_back({ "d1", fixed("D1  HD  EIIIOS2_42_HDImage_96MB.ISO"), [] { return std::vector<menu_item>{ menu_item::info("SCSI 1 · OS hard disk"), { "Change hard disk image\xE2\x80\xA6 (restarts)" } }; } });
-		menus.push_back({ "d3", fixed("D3  CD  EIII.01 Emulator Standards"), [] { std::vector<menu_item> v{ menu_item::info("SCSI 3 · /home/paul/Downloads/EIII.01 Emulator Standards.iso"),
+		menus.push_back({ "d1", fixed("D1  HD  EIIIOS2_42_HDImage_96MB.ISO"), [] { return std::vector<menu_item>{ menu_item::info("SCSI 1 · OS hard disk · ~/eiii/hd/EIIIOS2_42_HDImage_96MB.ISO"), { "Change hard disk image\xE2\x80\xA6 (restarts)" } }; } });
+		menus.push_back({ "d3", fixed("D3  CD  EIII.01 Emulator Standards"), [] { std::vector<menu_item> v{ menu_item::info("SCSI 3 · CD-ROM · ~/eiii/cd/EIII.01 Emulator Standards.iso"),
 			{ "Change disc\xE2\x80\xA6" }, { "Eject" }, menu_item::sep() }; menu_item a; a.label = "EIII.01 Emulator Standards"; a.checked = true; v.push_back(a);
 			v.push_back({ "EIII.02 More Emulator Standards" }); v.push_back({ "EIII.07 E-mu Classics" }); return v; } });
 		for (char const *d : { "d4", "d5", "d6", "d7" })
