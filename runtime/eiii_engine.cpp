@@ -26,7 +26,12 @@ void set_ftz()
 
 struct media_request { media_result r; };
 
-char const *media_slot_name(media_slot s) { return s == media_slot::cd ? "cd" : s == media_slot::hd ? "hd" : "rom_dir"; }
+char const *media_slot_name(media_slot s)
+{
+	switch (s) { case media_slot::cd: return "cd"; case media_slot::hd: return "hd"; case media_slot::rom: return "rom_dir";
+	case media_slot::scsi: return "scsi"; case media_slot::cem_model: return "cem_model"; case media_slot::restart: return "restart"; }
+	return "?";
+}
 
 engine::engine() = default;
 engine::~engine()
@@ -37,26 +42,33 @@ engine::~engine()
 	while (m_media_out.pop(rq)) delete rq;
 }
 
-static std::string &cfg_path(runtime_config &c, media_slot s) { return s == media_slot::cd ? c.cd_path : s == media_slot::hd ? c.hd_path : c.rom_dir; }
-
-bool engine::set_media(media_slot slot, std::string const &path)
+bool engine::queue_media(media_request *rq)
 {
-	if (m_media_inflight >= 8) return false;
-	auto *rq = new media_request;
-	rq->r.slot = slot; rq->r.path = path;
+	if (m_media_inflight >= 8) { delete rq; return false; }
 	if (!m_thread.joinable())
 	{
-		// no engine thread: only the configuration of the next start changes
-		std::string err;
-		bool const ok = path.empty() ? slot == media_slot::cd
-			: slot == media_slot::cd ? runtime::check_cd_image(path, err) : slot == media_slot::hd ? runtime::check_hd_image(path, err) : runtime::check_rom_dir(path, err);
-		rq->r.ok = ok; rq->r.error = ok ? "" : err.empty() ? "no path given" : err;
-		if (ok) cfg_path(m_cfg.rt, slot) = path;
+		apply_media(*rq, false);                     // no engine thread: only the configuration of the next start changes
 		m_media_out.push(rq);
 	}
 	else m_media_in.push(rq);
 	++m_media_inflight;
 	return true;
+}
+
+bool engine::set_media(media_slot slot, std::string const &path)
+{
+	auto *rq = new media_request;
+	rq->r.slot = slot; rq->r.path = path;
+	if (slot == media_slot::cd) { rq->r.slot = media_slot::scsi; rq->r.scsi_id = 3; rq->r.kind = scsi_kind::cd; }
+	if (slot == media_slot::hd) { rq->r.slot = media_slot::scsi; rq->r.scsi_id = 1; rq->r.kind = scsi_kind::hd; }
+	return queue_media(rq);
+}
+
+bool engine::set_scsi(unsigned id, scsi_kind kind, std::string const &path)
+{
+	auto *rq = new media_request;
+	rq->r.slot = media_slot::scsi; rq->r.scsi_id = uint8_t(id); rq->r.kind = kind; rq->r.path = path;
+	return queue_media(rq);
 }
 
 bool engine::poll_media_result(media_result &out)
@@ -66,36 +78,106 @@ bool engine::poll_media_result(media_result &out)
 	--m_media_inflight;
 	out = std::move(rq->r);
 	delete rq;
-	if (out.ok) m_media_view[int(out.slot)] = out.path;
+	if (out.ok)
+		switch (out.slot)
+		{
+		case media_slot::rom: m_view.rom_dir = out.path; break;
+		case media_slot::cem_model: m_view.cem_model = out.path; break;
+		case media_slot::scsi:
+			if (out.scsi_id == 1) m_view.hd_path = out.path;
+			else if (out.scsi_id == 3) m_view.cd_path = out.path;
+			else if (out.scsi_id < 8) m_view.scsi[out.scsi_id] = { out.kind, out.kind == scsi_kind::none ? std::string() : out.path };
+			break;
+		default: break;
+		}
 	return true;
 }
 
-std::string engine::media_path(media_slot slot) const { return m_media_view[int(slot)]; }
+std::string engine::media_path(media_slot slot) const
+{
+	switch (slot)
+	{
+	case media_slot::cd: return m_view.cd_path;
+	case media_slot::hd: return m_view.hd_path;
+	case media_slot::rom: return m_view.rom_dir;
+	case media_slot::cem_model: return m_view.cem_model;
+	default: return {};
+	}
+}
 
-// engine thread
-void engine::apply_media(media_request &rq)
+scsi_target engine::scsi(unsigned id) const
+{
+	if (id == 1) return { scsi_kind::hd, m_view.hd_path };
+	if (id == 3) return { scsi_kind::cd, m_view.cd_path };
+	return id < 8 && scsi_extra_id(id) ? m_view.scsi[id] : scsi_target{};
+}
+
+// engine thread (live) or main thread with no engine thread (configuration only)
+void engine::apply_media(media_request &rq, bool live)
 {
 	media_result &r = rq.r;
+	runtime_config &c = m_cfg.rt;
 	std::string err;
-	if (r.slot == media_slot::cd)
+	bool restart = false, ok = false;
+	runtime *const rt = live ? m_rt.get() : nullptr;
+	switch (r.slot)
 	{
-		if (r.path.empty()) { if (m_rt) m_rt->eject_cd(); r.ok = true; }
-		else r.ok = m_rt ? m_rt->mount_cd(r.path, err) : runtime::check_cd_image(r.path, err);
-	}
-	else if (r.path.empty()) err = std::string("no ") + (r.slot == media_slot::hd ? "hard disk image" : "ROM directory") + " given";
-	else r.ok = r.slot == media_slot::hd ? runtime::check_hd_image(r.path, err) : runtime::check_rom_dir(r.path, err);
-	r.error = r.ok ? "" : err;
-	if (!r.ok) return;
-	cfg_path(m_cfg.rt, r.slot) = r.path;
-	if (r.slot != media_slot::cd && m_power_state)
+	case media_slot::rom:
+		ok = runtime::check_rom_dir(r.path, err);
+		if (ok) { c.rom_dir = r.path; restart = true; }
+		break;
+	case media_slot::cem_model:
+		ok = r.path == "v1" || r.path == "v2";
+		if (!ok) err = "analog model must be v1 or v2";
+		else { c.cem_model = r.path; restart = true; }
+		break;
+	case media_slot::restart:
+		ok = true; restart = true;
+		break;
+	case media_slot::scsi:
 	{
-		// the OS and its file system state live on the HD (and the boot code in the ROMs): restart like a power cycle
-		m_rt.reset();
-		std::string berr;
-		if (!boot(berr)) { r.error = berr; }
-		publish(m_rt != nullptr, berr.c_str());
-		r.restarted = true;
+		unsigned const id = r.scsi_id;
+		if (id == 1)
+		{
+			if (r.kind != scsi_kind::hd || r.path.empty()) err = "SCSI 1 is the OS hard disk: choose a hard disk image";
+			else if ((ok = runtime::check_hd_image(r.path, err))) { c.hd_path = r.path; restart = true; }
+		}
+		else if (id == 3)
+		{
+			if (r.kind != scsi_kind::cd) err = "SCSI 3 is the unit's CD-ROM drive";
+			else if (r.path.empty()) { if (rt) rt->eject_cd(3); c.cd_path.clear(); ok = true; }
+			else if (rt) { if ((ok = rt->mount_cd(3, r.path, err))) c.cd_path = r.path; }
+			else if ((ok = runtime::check_cd_image(r.path, err))) c.cd_path = r.path;
+		}
+		else if (id < 8 && scsi_extra_id(id))
+		{
+			scsi_target &t = c.scsi[id];
+			bool const hot = r.kind == scsi_kind::cd && t.kind == scsi_kind::cd && rt && rt->drive_kind(id) == scsi_kind::cd;
+			if (r.kind == scsi_kind::hd) ok = !r.path.empty() && runtime::check_hd_image(r.path, err);
+			else if (r.kind == scsi_kind::cd) ok = r.path.empty() || runtime::check_cd_image(r.path, err);
+			else ok = true;
+			if (r.kind == scsi_kind::hd && r.path.empty()) err = "choose a hard disk image";
+			if (ok && hot) ok = r.path.empty() ? rt->eject_cd(id) : rt->mount_cd(id, r.path, err);
+			if (ok)
+			{
+				restart = !hot && !(r.kind == t.kind && r.path == t.path && r.kind == scsi_kind::none);
+				t = { r.kind, r.kind == scsi_kind::none ? std::string() : r.path };
+			}
+		}
+		else err = "SCSI ID must be 1, 3 or 4..7 (the OS does not use D2)";
+		break;
 	}
+	default: err = "unsupported request"; break;
+	}
+	r.ok = ok;
+	r.error = ok ? "" : err;
+	if (!ok || !restart || !live || !m_power_state) return;
+	// the OS and its file system state live on the HD and it finds its drives at boot: restart like a power cycle
+	m_rt.reset();
+	std::string berr;
+	if (!boot(berr)) r.error = berr;
+	publish(m_rt != nullptr, berr.c_str());
+	r.restarted = true;
 }
 
 void engine::start(engine_config const &cfg)
@@ -109,7 +191,7 @@ void engine::start(engine_config const &cfg)
 	if (m_latency > m_ring.capacity() / 2) m_latency = unsigned(m_ring.capacity() / 2);
 	m_quit = false;
 	m_primed = false;
-	for (media_slot sl : { media_slot::cd, media_slot::hd, media_slot::rom }) m_media_view[int(sl)] = cfg_path(m_cfg.rt, sl);
+	m_view = m_cfg.rt;
 	m_power_state = false;
 	m_last_pull_ns = 0;
 	m_thread = std::thread([this] { thread_main(); });
@@ -218,7 +300,7 @@ void engine::thread_main()
 		media_request *mq;
 		while (m_media_in.pop(mq))
 		{
-			apply_media(*mq);
+			apply_media(*mq, true);
 			if (mq->r.restarted) { status = mq->r.error; free_t0 = 0; }
 			while (!m_media_out.push(mq)) std::this_thread::sleep_for(std::chrono::milliseconds(1));   // bounded by m_media_inflight
 		}

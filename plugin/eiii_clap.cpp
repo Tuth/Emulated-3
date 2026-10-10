@@ -284,6 +284,8 @@ struct instance
 		while (eng.poll_media_result(r))
 		{
 			if (!r.ok) { show_media_message(r.error); continue; }
+			if (r.slot == eiii::media_slot::scsi && (r.scsi_id == 1 || r.scsi_id == 3)) r.slot = r.scsi_id == 1 ? eiii::media_slot::hd : eiii::media_slot::cd;
+			if (r.slot != eiii::media_slot::cd && r.slot != eiii::media_slot::hd && r.slot != eiii::media_slot::rom) continue;
 			std::string &f = media_field(r.slot);
 			if (r.slot == eiii::media_slot::cd && !f.empty()) media.cd_last_dir = dir_name(f);
 			if (f != r.path) { f = r.path; if (host_state) host_state->mark_dirty(host); }

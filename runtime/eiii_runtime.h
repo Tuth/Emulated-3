@@ -14,11 +14,18 @@
 
 namespace eiii {
 
+// optional extra SCSI targets.  The OS addresses SCSI ID n as drive Dn: D1 = internal HD, D3 = CD-ROM; it accepts extra
+// drives at D4..D7 (D2 is always "Invalid Drive" for OS 2.42, so it is not offered).
+enum class scsi_kind : uint8_t { none, hd, cd };
+struct scsi_target { scsi_kind kind = scsi_kind::none; std::string path; };   // cd: "" = drive without a disc
+constexpr bool scsi_extra_id(unsigned id) { return id >= 4 && id <= 7; }
+
 struct runtime_config
 {
 	std::string rom_dir;            // e3-lsboot_ip381a_emu_systems_4088.ic3 / e3-msboot_ip380a_emu_systems_4088.ic4
 	std::string hd_path;            // OS 2.42 hard disk image (SCSI ID 1), opened read-only
 	std::string cd_path;            // optional CD-ROM image (SCSI ID 3)
+	scsi_target scsi[8];            // extra drives at IDs 4..7 (scsi_extra_id); IDs 1 and 3 are hd_path / cd_path
 	std::string cem_model = "v1";   // "v1" | "v2"
 	std::string cem_calib;          // v2 calibration file (optional)
 	double sample_rate = 48000.0;   // output rate of the software backend
@@ -81,6 +88,9 @@ public:
 	// drive reports NOT READY.  An image that cannot be used is refused and the current disc stays in the drive.
 	bool mount_cd(std::string const &path, std::string &error);
 	void eject_cd();
+	bool mount_cd(unsigned scsi_id, std::string const &path, std::string &error);   // ID 3 or an extra CD drive
+	bool eject_cd(unsigned scsi_id);
+	scsi_kind drive_kind(unsigned scsi_id) const;        // what is on the bus at this ID
 	static bool check_cd_image(std::string const &path, std::string &error);   // readable MODE1/2048 ISO
 	static bool check_hd_image(std::string const &path, std::string &error);   // readable, non-empty, whole 512-byte sectors
 	static bool check_rom_dir(std::string const &dir, std::string &error);     // both boot ROM halves present
