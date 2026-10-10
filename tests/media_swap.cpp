@@ -2,8 +2,11 @@
 //   1. CD re-insert after boot (new medium: UNIT ATTENTION) -> Load Bank 44 from D3 still works
 //   2. CD eject (NOT READY) -> Load Bank from D3 does not reach the bank list; the OS reports "SCSI Hardware Error!"
 //   3. CD mount again -> Load Bank 44 works again
+//   3b. a different disc (EIII_CD2, e.g. EIII.02 More Emulator Standards): Load Bank 01 from it, then back to the
+//       first disc and Load Bank 44 again
 //   4. a CD image that cannot be used is refused and the mounted disc stays
 //   5. HD swap -> the machine restarts from power-on and boots the OS from the new image
+// EIII_CD2 (optional): a second EIII CD with bank 01 "Arc&Spic Celli4M" (EIII.02); default ~/EIII_RE/media/cd/EIII.02*.iso
 // EIII_HD2 (optional): a second OS hard disk image for step 5 (default: the 239 MB OS 2.42 image next to EIII_HD).
 #include "panel_rig.h"
 #include <sys/stat.h>
@@ -25,11 +28,15 @@ static bool open_bank_list(rig &t)
 	t.press("load_bank");
 	dump(t, "load bank");
 	if (!t.wait_row(0, "   LOAD BANK from", 3.0)) return false;
+	// the module opens on the last drive: first time it waits for Enter (-> drive selection); after a load from D3 it
+	// reads D3 again and lists its banks; after a drive error it opens drive selection
 	t.pump(0.3);
+	if (!t.wait([&] { return t.row(3).find("Wait") == std::string::npos; }, 10.0)) { dump(t, "drive not ready"); return false; }
+	t.pump(0.5);                                     // let the OS finish writing the prompt
+	dump(t, "opened");
+	if (t.lcd().find("Select a Bank") != std::string::npos && t.row(1).compare(0, 3, "D3 ") == 0) return true;
 	if (t.lcd().find("Select a Drive") == std::string::npos)
 	{
-		// first time: the module opens on the current drive and Enter goes to drive selection; after a drive error
-		// the OS opens drive selection directly
 		t.press("enter");
 		dump(t, "enter");
 		if (!t.wait_text("Select a Drive", 3.0)) return false;
@@ -42,14 +49,15 @@ static bool open_bank_list(rig &t)
 	dump(t, "enter");
 	return ok;
 }
-static bool load_bank_44(rig &t)
+static bool load_bank(rig &t, char const *digits, std::string const &listed, std::function<bool()> loaded)
 {
 	if (!open_bank_list(t)) return false;
-	t.press("keypad_4"); t.press("keypad_4");
-	if (!t.wait_row(2, "B44 Tenor Sax", 3.0)) return false;
+	t.press((std::string("keypad_") + digits[0]).c_str()); t.press((std::string("keypad_") + digits[1]).c_str());
+	if (!t.wait_row(2, listed, 3.0)) { dump(t, "bank number"); return false; }
 	t.press("enter");
-	return t.wait_row(1, "S00 Scott's Place", 90.0);
+	return t.wait(loaded, 90.0);
 }
+static bool load_bank_44(rig &t) { return load_bank(t, "44", "B44 Tenor Sax", [&] { return t.row(1).compare(0, 17, "S00 Scott's Place") == 0; }); }
 static bool file_exists(std::string const &p) { struct stat st; return !p.empty() && stat(p.c_str(), &st) == 0; }
 
 int main()
@@ -88,6 +96,21 @@ int main()
 	t.e.set_media(eiii::media_slot::cd, cd);
 	CHECK(media_done(t, r) && r.ok, "CD mounted again");
 	CHECK(load_bank_44(t), "Load Bank 44 works again after re-inserting: [%s]", t.row(1).c_str());
+
+	// 3b. another disc, then the first one again
+	std::string cd2 = env("EIII_CD2");
+	if (cd2.empty() && getenv("HOME")) cd2 = std::string(getenv("HOME")) + "/EIII_RE/media/cd/EIII.02 More Emulator Standards.iso";
+	if (file_exists(cd2))
+	{
+		t.e.set_media(eiii::media_slot::cd, cd2);
+		CHECK(media_done(t, r) && r.ok, "second disc mounted: %s", cd2.c_str());
+		CHECK(load_bank(t, "01", "B01 Arc&Spic Celli4M", [&] { return t.row(0).compare(0, 20, "P00 Basic Arco Celli") == 0; }),
+			"Load Bank 01 from the second disc: [%s] [%s]", t.row(0).c_str(), t.row(1).c_str());
+		t.e.set_media(eiii::media_slot::cd, cd);
+		CHECK(media_done(t, r) && r.ok, "first disc back in the drive");
+		CHECK(load_bank_44(t), "Load Bank 44 from the first disc again: [%s]", t.row(1).c_str());
+	}
+	else printf("SKIP second disc (set EIII_CD2)\n");
 
 	// 4. unusable images are refused; the current disc stays
 	t.e.set_media(eiii::media_slot::cd, "/nonexistent/disc.iso");
