@@ -5,7 +5,8 @@
 // Threads: process() [audio] only exchanges lock-free data with the instance's engine thread; everything else is
 // [main-thread].  No process-wide mutable state: every instance owns its engine, adapter, X connection and window.
 //
-// Media (never bundled): environment EIII_ROM_DIR / EIII_HD / EIII_CD, else ~/.config/eiii/eiii.conf
+// Media (never bundled; INSTALL.md): environment EIII_ROM_DIR / EIII_HD / EIII_CD, else ~/.config/eiii/eiii.conf, else
+// the default folders ~/.local/share/eiii/roms, .../hd (first image), .../cd (first .iso).  eiii.conf keys:
 //   rom_dir = /path/to/roms        hd = /path/to/EIII_OS242.hd        cd = /path/to/factory.iso
 //   scsi4 .. scsi7 = cd:/path/disc.iso | cd: (drive without a disc) | hd:/path/disk.img     (optional extra drives D4..D7)
 // Audio: stereo Main Out; stereo Sample In feeds the ADC board (sampling through the original OS, level = the
@@ -55,7 +56,7 @@ clap_plugin_descriptor_t const k_desc = {
 	"",
 	"",
 	"",
-	"0.9.0",
+	"0.1.0-beta",
 	"Unofficial E-mu Emulator III runtime: the original OS from your own disk images, operated from the rack front panel",
 	k_features,
 };
@@ -85,12 +86,15 @@ std::string target_text(eiii::scsi_target const &t)
 	return t.kind == eiii::scsi_kind::cd ? "cd:" + t.path : t.kind == eiii::scsi_kind::hd ? "hd:" + t.path : "none";
 }
 
+std::string config_dir() { if (char const *x = getenv("XDG_CONFIG_HOME")) return std::string(x) + "/eiii"; if (char const *h = getenv("HOME")) return std::string(h) + "/.config/eiii"; return {}; }
+std::string default_media_dir() { if (char const *x = getenv("XDG_DATA_HOME")) return std::string(x) + "/eiii"; if (char const *h = getenv("HOME")) return std::string(h) + "/.local/share/eiii"; return {}; }
+
 media_config read_media_config()
 {
 	media_config m;
-	if (char const *home = getenv("HOME"))
+	if (std::string const cdir = config_dir(); !cdir.empty())
 	{
-		std::ifstream in(std::string(home) + "/.config/eiii/eiii.conf");
+		std::ifstream in(cdir + "/eiii.conf");
 		std::string line;
 		while (std::getline(in, line))
 		{
@@ -113,6 +117,31 @@ media_config read_media_config()
 	if (char const *e = getenv("EIII_AUTOLOAD_BANK")) m.autoload_bank = atoi(e);
 	if (char const *e = getenv("EIII_AUTOLOAD_DRIVE")) m.autoload_drive = atoi(e);
 	if (char const *e = getenv("EIII_AUTOLOAD_PRESET")) m.autoload_preset = atoi(e);
+	// nothing configured: the default folders (XDG data dir)
+	std::string const data = default_media_dir();
+	auto first = [](std::string const &dir, std::vector<std::string> const &exts) {
+		std::vector<std::string> v;
+		if (DIR *d = opendir(dir.c_str()))
+		{
+			while (dirent *e = readdir(d))
+			{
+				std::string const n = e->d_name;
+				if (n.empty() || n[0] == '.') continue;
+				std::string low = n; for (char &c : low) c = char(tolower((unsigned char)c));
+				for (auto const &x : exts) if (low.size() > x.size() && low.compare(low.size() - x.size(), x.size(), x) == 0) { v.push_back(dir + "/" + n); break; }
+			}
+			closedir(d);
+		}
+		std::sort(v.begin(), v.end());
+		return v.empty() ? std::string() : v.front();
+	};
+	if (!data.empty())
+	{
+		struct stat st;
+		if (m.rom_dir.empty() && stat((data + "/roms").c_str(), &st) == 0) m.rom_dir = data + "/roms";
+		if (m.hd().empty()) m.hd() = first(data + "/hd", { ".iso", ".img", ".hd", ".hda", ".raw" });
+		if (m.cd().empty()) m.cd() = first(data + "/cd", { ".iso" });
+	}
 	return m;
 }
 
@@ -188,6 +217,43 @@ struct picker
 	}
 	~picker() { cancel(); }
 };
+
+// Settings -> "Use these drives as defaults": rewrite the media keys of eiii.conf, keep everything else (comments,
+// autoload, ...).  [main-thread, user action]
+bool write_media_defaults(media_config &m, std::string &msg)
+{
+	std::string const dir = config_dir();
+	if (dir.empty()) { msg = "no home folder"; return false; }
+	mkdir((dir.substr(0, dir.rfind('/'))).c_str(), 0755);
+	mkdir(dir.c_str(), 0755);
+	std::string const path = dir + "/eiii.conf";
+	std::vector<std::pair<std::string, std::string>> want = { { "rom_dir", m.rom_dir }, { "hd", m.hd() }, { "cd", m.cd() }, { "cem_model", m.cem_model } };
+	for (unsigned id = 4; id < 8; ++id) want.push_back({ "scsi" + std::to_string(id), target_text(m.scsi[id]) });
+	std::vector<std::string> lines;
+	{ std::ifstream in(path); std::string l; while (std::getline(in, l)) lines.push_back(l); }
+	if (lines.empty()) lines.push_back("# EIII Rack defaults for new instances (INSTALL.md); EIII_ROM_DIR / EIII_HD / EIII_CD override");
+	for (auto const &[k, v] : want)
+	{
+		bool done = false;
+		for (auto &l : lines)
+		{
+			size_t i = 0; while (i < l.size() && isspace((unsigned char)l[i])) ++i;
+			if (l.compare(i, k.size(), k) != 0) continue;
+			size_t j = i + k.size(); while (j < l.size() && isspace((unsigned char)l[j])) ++j;
+			if (j < l.size() && l[j] == '=') { l = k + " = " + v; done = true; break; }
+		}
+		if (!done && !(k.rfind("scsi", 0) == 0 && v == "none")) lines.push_back(k + " = " + v);
+	}
+	std::string const tmp = path + ".new";
+	{
+		std::ofstream out(tmp);
+		for (auto const &l : lines) out << l << "\n";
+		if (!out) { msg = "cannot write " + tmp; return false; }
+	}
+	if (rename(tmp.c_str(), path.c_str()) != 0) { msg = "cannot replace " + path; return false; }
+	msg = "saved as defaults: " + path;
+	return true;
+}
 
 // argv of a file chooser: what = "cd" / "hd" (prints a file path), "rom" (prints a folder) or "save" (prints a new
 // file name), start = folder/file
@@ -321,7 +387,11 @@ struct instance
 	void update_menu_status()
 	{
 		if (!media_msg.empty() && std::chrono::steady_clock::now() >= media_msg_until) media_msg.clear();
-		if (win) win->view().set_menu_status(!media_msg.empty() ? media_msg : pick.running() ? "choosing a file\xE2\x80\xA6" : "");
+		std::string st = !media_msg.empty() ? media_msg : pick.running() ? "choosing a file\xE2\x80\xA6" : "";
+		// the unit cannot start (missing ROMs / OS disk ...): say so and where to fix it
+		if (st.empty() && ui && !ui->snapshot().running && eng.powered() && ui->snapshot().status[0])
+			st = std::string(ui->snapshot().status) + " \xE2\x80\x94 see Settings / D1, or INSTALL.md";
+		if (win) win->view().set_menu_status(st);
 	}
 	void dirty() { if (host_state) host_state->mark_dirty(host); }
 
@@ -474,6 +544,8 @@ struct instance
 		v.push_back(menu_item::sep());
 		item("Boot ROM folder\xE2\x80\xA6 (restarts)", [this] { open_picker("rom", 0); });
 		v.push_back(menu_item::info(media.rom_dir.empty() ? std::string("no ROM folder set") : media.rom_dir));
+		v.push_back(menu_item::sep());
+		item("Use these drives as defaults for new instances", [this] { std::string m; write_media_defaults(media, m); show_media_message(m); });
 		return v;
 	}
 	std::vector<eiii::ui::menu> build_menus()

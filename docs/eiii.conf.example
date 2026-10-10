@@ -1,0 +1,16 @@
+# EIII Rack (CLAP) defaults for new instances: copy to ~/.config/eiii/eiii.conf and edit the paths (INSTALL.md)
+# boot ROM folder (the two files, INSTALL.md section 2)
+rom_dir = /home/me/eiii/roms
+# OS 2.42 hard disk image: SCSI ID 1, drive D1
+hd      = /home/me/eiii/hd/EIII_OS242_96MB.img
+# CD-ROM image in the unit's CD drive: SCSI ID 3, drive D3 (leave empty for no disc)
+cd      = /home/me/eiii/cd/EIII.01 Emulator Standards.iso
+# optional extra drives D4..D7: cd:PATH (CD drive with a disc), cd: (empty CD drive), hd:PATH (hard disk), none
+scsi4   = cd:/home/me/eiii/cd/EIII.02 More Emulator Standards.iso
+# scsi5 = hd:/home/me/eiii/hd/samples.img
+# analog voice model: v1 (default, MAME-matched) or v2 (CEM3387 circuit model)
+cem_model = v1
+# optional: after power-on, press Load Bank, Enter, <drive>, Enter, <bank>, Enter, <preset> on the panel
+# autoload_bank   = 44
+# autoload_drive  = 3
+# autoload_preset = 1

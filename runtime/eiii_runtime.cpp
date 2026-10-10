@@ -2,10 +2,28 @@
 // standalone has been proven with (instruction-identical to MAME); only process globals became instance state.
 #include "eiii_runtime_impl.h"
 #include <algorithm>
+#include <dirent.h>
 
 namespace eiii {
 
-static char const *const k_rom_lo = "e3-lsboot_ip381a_emu_systems_4088.ic3", *const k_rom_hi = "e3-msboot_ip380a_emu_systems_4088.ic4";
+// boot ROM halves (2 x 16 KiB, 27128): MAME's names first, then the names common in dump collections; any letter case
+static char const *const k_rom_lo[] = { "e3-lsboot_ip381a_emu_systems_4088.ic3", "EIII_IP381A_L.Bin", nullptr };
+static char const *const k_rom_hi[] = { "e3-msboot_ip380a_emu_systems_4088.ic4", "EIII_IP380A_R.Bin", nullptr };
+
+// the file in `dir` with one of `names` (case-insensitive), "" if none
+static std::string find_rom(std::string const &dir, char const *const *names)
+{
+	DIR *d = opendir(dir.empty() ? "." : dir.c_str());
+	if (!d) return {};
+	std::string found;
+	auto lower = [](std::string v) { for (char &c : v) c = char(tolower((unsigned char)c)); return v; };
+	int best = 1 << 30;
+	while (dirent *e = readdir(d))
+		for (int i = 0; names[i]; ++i)
+			if (lower(e->d_name) == lower(names[i]) && i < best) { best = i; found = dir + "/" + e->d_name; }
+	closedir(d);
+	return found;
+}
 
 void runtime::impl::bind()
 {
@@ -23,8 +41,10 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	m.log_leds = cfg.log_leds;
 	m.log_midi_chain = cfg.log_midi_chain;
 
-	auto load = [&](char const *name, int lane) {
-		std::string const path = cfg.rom_dir + "/" + name;
+	auto load = [&](char const *const *names, int lane) {
+		if (cfg.rom_dir.empty()) { err = "no boot ROM folder set"; return false; }
+		std::string const path = find_rom(cfg.rom_dir, names);
+		if (path.empty()) { err = std::string("boot ROM ") + names[0] + " not found in " + cfg.rom_dir; return false; }
 		FILE *f = fopen(path.c_str(), "rb");
 		if (!f) { err = "cannot open boot ROM " + path; return false; }
 		std::vector<u8> b(0x4000); size_t const n = fread(b.data(), 1, b.size(), f); fclose(f);
@@ -56,7 +76,7 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	machine_t *const mp = &m;
 	scc->out_int_callback().set([mp](int s) { mp->irq_w(machine_t::SCCINT, !s); });
 	m.hdc = hdc.get();
-	if (cfg.hd_path.empty()) { err = "no OS hard disk image configured"; return false; }
+	if (cfg.hd_path.empty()) { err = "no OS hard disk image set (D1)"; return false; }
 	if (!hd_img->load(cfg.hd_path)) { err = "cannot open hard disk image " + cfg.hd_path; return false; }
 	if (!cfg.cd_path.empty() && !cd_img->load(cfg.cd_path)) { err = "cannot open CD-ROM image " + cfg.cd_path; return false; }
 	scsi->set_external_device(0, static_cast<nscsi_device_interface *>(hdc.get()));
@@ -212,10 +232,13 @@ bool runtime::check_hd_image(std::string const &path, std::string &error)
 }
 bool runtime::check_rom_dir(std::string const &dir, std::string &error)
 {
-	for (char const *name : { k_rom_lo, k_rom_hi })
+	for (char const *const *names : { k_rom_lo, k_rom_hi })
 	{
+		std::string const path = find_rom(dir, names);
+		if (path.empty()) { error = std::string("boot ROM ") + names[0] + " (or " + names[1] + ") not found in " + dir; return false; }
 		uint64_t n;
-		if (!file_size(dir + "/" + name, n, error, "boot ROM")) return false;
+		if (!file_size(path, n, error, "boot ROM")) return false;
+		if (n != 16384) { error = "boot ROM " + path + " is " + std::to_string(n) + " bytes, expected 16384"; return false; }
 	}
 	return true;
 }
