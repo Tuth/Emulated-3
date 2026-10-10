@@ -99,6 +99,8 @@ Emulated-3 is an independent project. It is **not affiliated with, endorsed by, 
 Creative Technology**. "E-mu", "Emulator" and "Emulator III" are trademarks of their respective owners and are used
 here only to describe what this software emulates.
 
+Emulated-3's own code is licensed under the **GNU General Public License v3.0** (see [LICENSE](LICENSE)).
+
 Third-party code in this repository, each under its own licence:
 
 | Component | Licence |
