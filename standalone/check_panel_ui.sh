@@ -12,6 +12,7 @@ run "LCD mapping (DDRAM -> 4x20, cursor, CGRAM)" $B/tests/lcd_mapping
 run "functional panel test from power-on via the PanelUI adapter" $B/tests/panel_functional
 run "three concurrent instances (bit-identical A/B, independent C)" $B/tests/engine_instances
 run "runtime media changes: CD swap / eject / re-insert + Load Bank, HD swap restarts and boots" $B/tests/media_swap
+run "sampling through the original OS: host audio -> ADC at 44 053 Hz, Sample Input level, Place Sample, MIDI playback" $B/tests/sampling
 run "display themes on the Contrast knob (click cycles, turn = level, state, machine untouched)" $B/tests/display_themes
 if [ -x "${CLAP_VALIDATOR:-$HOME/EIII_RE/tools/clap-validator}" ] && [ -f build/pic/EIII-Rack.clap ]; then
 	out=$("${CLAP_VALIDATOR:-$HOME/EIII_RE/tools/clap-validator}" validate build/pic/EIII-Rack.clap 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep "tests run")

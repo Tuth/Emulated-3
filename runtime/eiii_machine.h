@@ -92,7 +92,9 @@ struct machine_t : public address_space
 	u8 adc_ctrl = 0;
 	s16 adc_latch[2] = {0, 0};
 	u16 adc_pot[8] = {0x3800, 0x0000, 0x31f1, 0x0001, 0x73cc, 0x708d, 0x2909, 0x0000};
-	unsigned long long adc_pot_reads[8] = {};   // right-word reads per multiplexer input with -POTSON active (statistics)
+	unsigned long long adc_pot_reads[8] = {};
+	// host audio input: (conversion time in emulated seconds) -> L/R ADC words; unset = silence
+	std::function<void(double, s16 *)> adc_source;   // right-word reads per multiplexer input with -POTSON active (statistics)
 	FILE *log = nullptr;
 	unsigned long long unmapped = 0, ncr_logged = 0;
 	bool log_voice_starts = false;   // "START ..." line on stderr when a voice starts (regression scripts parse it)
@@ -270,7 +272,13 @@ struct machine_t : public address_space
 				u64 const c = cpu->total_cycles();
 				u64 const boundary = (c / period + 1) * period;
 				cpu->adjust_icount(-int(boundary - c));
-				adc_latch[0] = adc_latch[1] = 0;      // no audio input in this host yet
+				// the analog input at the end of this conversion (after the input VCA and filters), from the host.
+				// Only in the two configurations the Sample overlay uses (0x08 = 33 333 Hz, 0x38 = 44 053 Hz, -POTSON
+				// off): the OS's pot scan also reads the right word at 0x28 and takes it as a control value, so live
+				// audio there would act like a moving slider.  Which signal the hardware presents in that slot is not
+				// known; outside sampling the converter reads silence, as in the proven MAME model without a test input.
+				if (adc_source && (adc_ctrl == 0x08 || adc_ctrl == 0x38)) adc_source(double(boundary) / 10'000'000.0, adc_latch);
+				else adc_latch[0] = adc_latch[1] = 0;
 			}
 			if (off & 1)
 			{

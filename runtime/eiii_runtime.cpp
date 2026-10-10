@@ -235,6 +235,23 @@ scsi_kind runtime::drive_kind(unsigned id) const
 	return m->extra[id].hd ? scsi_kind::hd : m->extra[id].cd ? scsi_kind::cd : scsi_kind::none;
 }
 
+void runtime::set_adc_source(std::function<void(double, int16_t[2])> source)
+{
+	if (!source) { m->m.adc_source = nullptr; return; }
+	m->m.adc_source = [src = std::move(source)](double t, s16 *lr) { int16_t v[2] = { 0, 0 }; src(t, v); lr[0] = v[0]; lr[1] = v[1]; };
+}
+
+uint16_t runtime::debug_read16(uint32_t a) const
+{
+	machine_t const &x = m->m;
+	a &= 0xfffffe;
+	if (a < 0x8000) return x.rom[(a >> 1) & 0x3fff];
+	if (a >= 0x8000 && a < 0x28000) return x.ram[(a - 0x8000) >> 1];
+	if (a >= 0x400000 && a < 0xc00000) return x.snd[(a - 0x400000) >> 1];
+	return 0;
+}
+uint32_t runtime::debug_read32(uint32_t a) const { return uint32_t(debug_read16(a)) | (uint32_t(debug_read16(a + 2)) << 16); }
+
 uint64_t runtime::cycles() const { return m->cpu ? uint64_t(m->cpu->total_cycles()) : 0; }
 double runtime::seconds() const { return double(cycles()) / cpu_hz; }
 int runtime::stop_code() const { return m->stop; }

@@ -8,6 +8,8 @@
 // Media (never bundled): environment EIII_ROM_DIR / EIII_HD / EIII_CD, else ~/.config/eiii/eiii.conf
 //   rom_dir = /path/to/roms        hd = /path/to/EIII_OS242.hd        cd = /path/to/factory.iso
 //   scsi4 .. scsi7 = cd:/path/disc.iso | cd: (drive without a disc) | hd:/path/disk.img     (optional extra drives D4..D7)
+// Audio: stereo Main Out; stereo Sample In feeds the ADC board (sampling through the original OS, level = the
+// panel's Sample Input slider).
 //   cem_model = v1|v2              autoload_bank = 44   autoload_drive = 3   autoload_preset = 1   (optional)
 // These are the defaults of a new instance; the media in use are saved in the CLAP state, so a project reopens with
 // its disks.  The menu bar above the panel shows the drives (D1 OS hard disk, D3 CD-ROM, extra drives D4..D7) and
@@ -466,13 +468,14 @@ struct instance
 };
 
 // ---------------------------------------------------------------------------------------------- extensions
-uint32_t audio_ports_count(clap_plugin_t const *, bool is_input) { return is_input ? 0 : 1; }
+// Main Out, and Sample In: the ADC board's line inputs (what the original OS records with Sample -> Arm Sampling)
+uint32_t audio_ports_count(clap_plugin_t const *, bool) { return 1; }
 bool audio_ports_get(clap_plugin_t const *, uint32_t index, bool is_input, clap_audio_port_info_t *info)
 {
-	if (is_input || index != 0) return false;
-	info->id = 0;
-	snprintf(info->name, sizeof info->name, "%s", "Main Out");
-	info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+	if (index != 0) return false;
+	info->id = is_input ? 1 : 0;
+	snprintf(info->name, sizeof info->name, "%s", is_input ? "Sample In" : "Main Out");
+	info->flags = is_input ? 0 : CLAP_AUDIO_PORT_IS_MAIN;
 	info->channel_count = 2;
 	info->port_type = CLAP_PORT_STEREO;
 	info->in_place_pair = CLAP_INVALID_ID;
@@ -753,6 +756,13 @@ clap_process_status p_process(clap_plugin_t const *p, clap_process_t const *proc
 			}
 		}
 	}
+	// sampling input for this block (before pull(): same frame clock as MIDI)
+	if (proc->audio_inputs_count >= 1 && proc->audio_inputs[0].channel_count >= 1 && proc->audio_inputs[0].data32)
+	{
+		clap_audio_buffer_t const &in = proc->audio_inputs[0];
+		s->eng.input(in.data32[0], in.channel_count >= 2 ? in.data32[1] : in.data32[0], proc->frames_count);
+	}
+	else s->eng.input(nullptr, nullptr, proc->frames_count);
 	if (proc->audio_outputs_count >= 1 && proc->audio_outputs[0].channel_count >= 2 && proc->audio_outputs[0].data32)
 	{
 		float *const l = proc->audio_outputs[0].data32[0], *const r = proc->audio_outputs[0].data32[1];

@@ -114,6 +114,12 @@ Clicking the floppy drive opens the D3 menu, its eject button ejects the CD.  Fi
 The media in use, the analog model and the display settings are saved in the CLAP state, so a project reopens with
 its disks (paths missing on another machine keep that machine's defaults).
 
+Sampling: the stereo **Sample In** port is the ADC board's line input.  In the SAMPLE module, 7 (Arm Sampling) waits for
+the input to cross the threshold, Enter stops, 6 (Place Sample) maps the take onto keys.  The panel's Sample Input
+slider sets the input level (assumed law: centre = unity, ±20 dB at the ends, silent at the very bottom — the original
+dbx 2155 gain law is not documented); the OS shows "Sample Overload!" for clipped takes.  The input is delayed by the
+reported latency like MIDI and resampled to the rate the OS selects (44 053 or 33 333 Hz).
+
 The factory banks receive MIDI on channel 14 (a setting of the bank, changeable on the instrument). A new host sample
 rate restarts the instrument from power-on; deactivate/activate otherwise keeps it running.
 
@@ -133,6 +139,7 @@ rate restarts the instrument from power-on; deactivate/activate otherwise keeps 
 | `build/default/tests/panel_functional` | from power-on, only through the PanelUI adapter: Load Bank, Enter, 3, Enter, 44, Enter, 01, MIDI note, Master Volume, Master Tune + Data slider, module LEDs, Supermode, Mode, Play/Stop, Transpose, Record, Erase |
 | `build/default/tests/engine_instances` | three concurrent instances: identical inputs give bit-identical audio (reading the panel has no effect), independence |
 | `build/default/tests/media_swap` | runtime media changes through the panel: CD re-insert / eject ("SCSI Hardware Error!") / second disc + Load Bank, extra CD drive at SCSI 4 (Load Bank from D4, hot swap), HD at SCSI 5, refused images, OS HD swap -> restart + boot |
+| `build/default/tests/sampling` | sampling with host audio on the ADC: SAMPLE -> 7 arms, a 1 kHz tone triggers, Enter stops; S01 in sample RAM at 44 053 Hz, stereo, exact period, level, no gaps; Sample Input at the top clips ("Sample Overload!"), at the bottom stays silent; Place Sample; G2 plays 1 kHz, C2 668 Hz |
 | `build/default/tests/display_themes` | Contrast knob: click cycles the 5 display themes, drag/wheel change only the current theme's level, each theme renders differently (OLED = true black), state text round trip, machine untouched |
 | `build/default/tools/clap_host_test` | CLAP host: 2 instances, realtime audio + MIDI, GUI create/resize/destroy cycles, rapid presses, slider drags, Contrast clicks -> CLAP state (mark_dirty on the main thread, restored into the second instance); `--media-test`: eject button, drive menu (quick list, scripted file chooser), Settings menu, media states restored into the second instance |
 

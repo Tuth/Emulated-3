@@ -1,5 +1,6 @@
 // clap_host_test: a minimal CLAP host for the EIII Rack plugin's GUI/threading regressions.
-//   * N instances, each with its own realtime audio thread (256-frame blocks at 48 kHz, MIDI note events on ch 14)
+//   * N instances, each with its own realtime audio thread (256-frame blocks at 48 kHz, MIDI note events on ch 14,
+//     a quiet tone on the Sample In port)
 //   * main thread = GUI thread: host timers + posix fds, GUI create / set_parent / show / resize / destroy cycles
 //   * rapid button presses and slider drags delivered as X events to the plugin's window while notes play
 //   * --media-test: the menu bar and the drive area: eject button, drive click -> D3 menu (quick disc list, Change
@@ -114,7 +115,11 @@ void audio_thread(plug *s)
 	clap_audio_buffer_t out{ chans, nullptr, 2, 0, 0 };
 	event_list el; clap_input_events_t in{ &el, ev_size, ev_get };
 	clap_output_events_t oe{ nullptr, out_try_push };
-	clap_process_t pr{}; pr.frames_count = n; pr.audio_outputs = &out; pr.audio_outputs_count = 1; pr.in_events = &in; pr.out_events = &oe; pr.steady_time = 0;
+	// Sample In: a quiet 440 Hz tone (exercises the realtime input path; nothing records it unless the OS is armed)
+	std::vector<float> il(n), ir(n);
+	float *ichans[2] = { il.data(), ir.data() };
+	clap_audio_buffer_t inb{ ichans, nullptr, 2, 0, 0 };
+	clap_process_t pr{}; pr.frames_count = n; pr.audio_outputs = &out; pr.audio_outputs_count = 1; pr.audio_inputs = &inb; pr.audio_inputs_count = 1; pr.in_events = &in; pr.out_events = &oe; pr.steady_time = 0;
 	auto next = std::chrono::steady_clock::now();
 	uint64_t blk = 0;
 	double acc = 0; uint64_t cnt = 0;
@@ -134,6 +139,7 @@ void audio_thread(plug *s)
 				el.ev.push_back(e);
 			}
 		}
+		for (uint32_t k = 0; k < n; ++k) il[k] = ir[k] = 0.05f * float(std::sin(2 * M_PI * 440.0 * double(blk * n + k) / 48000.0));
 		auto const t0 = std::chrono::steady_clock::now();
 		s->p->process(s->p, &pr);
 		double const dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

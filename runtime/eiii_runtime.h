@@ -8,6 +8,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,6 +83,15 @@ public:
 	uint16_t adc_input(unsigned input) const;
 	void midi_in(uint8_t const *bytes, size_t n);         // bytes into the Z85230 channel A RxD at 31250 baud
 	void schedule_midi(double t_seconds, std::vector<uint8_t> bytes);   // scheduled MIDI (regressions)
+
+	// ---- sampling input ----
+	// The ADC board's analog input: called on the instance's thread at each conversion the OS performs (44 053 or
+	// 33 333 Hz, paced by ADC WAIT), with the conversion time in emulated seconds; returns the L/R ADC words.
+	void set_adc_source(std::function<void(double t_seconds, int16_t lr[2])> source);
+
+	// ---- diagnostics (tests): read emulated memory as the CPU sees it, no side effects on RAM / sample RAM ----
+	uint16_t debug_read16(uint32_t address) const;
+	uint32_t debug_read32(uint32_t address) const;   // little-endian, as the NS32016
 
 	// ---- media (SCSI ID 3 CD-ROM drive) ----
 	// A disc change as on the real drive: the next command after a mount reports UNIT ATTENTION (new medium), an empty

@@ -135,7 +135,7 @@ check: eiii-standalone
 	./check_runtime.sh
 	./check_audio.sh
 	./check_cem_v2.sh
-	$(MAKE) $(BUILD)/tests/lcd_mapping $(BUILD)/tests/panel_functional $(BUILD)/tests/engine_instances $(BUILD)/tests/display_themes $(BUILD)/tests/media_swap $(BUILD)/tools/clap_host_test
+	$(MAKE) $(BUILD)/tests/lcd_mapping $(BUILD)/tests/panel_functional $(BUILD)/tests/engine_instances $(BUILD)/tests/display_themes $(BUILD)/tests/media_swap $(BUILD)/tests/sampling $(BUILD)/tools/clap_host_test
 	./check_panel_ui.sh
 
 clean:
