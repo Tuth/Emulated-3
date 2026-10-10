@@ -38,6 +38,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <thread>
+#include <atomic>
 #include <vector>
 
 extern char **environ;
@@ -63,6 +65,7 @@ struct media_config
 	std::string rom_dir, cem_model = "v1";
 	eiii::scsi_target scsi[8];      // [1] OS hard disk, [3] CD-ROM, [4..7] extra drives
 	std::string cd_last_dir;        // where the CD chooser opens when the drive is empty
+	std::string hd_changes[8];      // hard disk change sets from the project, used when the engine starts
 	int autoload_bank = -1, autoload_drive = 3, autoload_preset = -1;
 	std::string &hd() { return scsi[1].path; }
 	std::string &cd() { return scsi[3].path; }
@@ -186,16 +189,18 @@ struct picker
 	~picker() { cancel(); }
 };
 
-// argv of a file chooser: what = "cd" / "hd" (prints a file path) or "rom" (prints a folder), start = folder/file
+// argv of a file chooser: what = "cd" / "hd" (prints a file path), "rom" (prints a folder) or "save" (prints a new
+// file name), start = folder/file
 std::vector<std::string> picker_args(std::string const &what, std::string const &start)
 {
 	if (char const *custom = getenv("EIII_RACK_PICKER")) return { custom, what, start };
-	std::string const title = what == "cd" ? "EIII Rack - CD-ROM image" : what == "hd" ? "EIII Rack - hard disk image" : "EIII Rack - boot ROM folder";
+	std::string const title = what == "cd" ? "EIII Rack - CD-ROM image" : what == "hd" ? "EIII Rack - hard disk image" : what == "save" ? "EIII Rack - save hard disk with its changes as" : "EIII Rack - boot ROM folder";
 	if (in_path("zenity"))
 	{
 		std::vector<std::string> a = { "zenity", "--file-selection", "--title=" + title };
 		if (!start.empty()) a.push_back("--filename=" + start);
 		if (what == "rom") { a.push_back("--directory"); return a; }
+		if (what == "save") { a.push_back("--save"); a.push_back("--confirm-overwrite"); return a; }
 		a.push_back(what == "cd" ? "--file-filter=CD-ROM images (*.iso) | *.iso *.ISO *.Iso" : "--file-filter=Hard disk images | *.iso *.ISO *.hd *.HD *.img *.IMG *.hda *.raw");
 		a.push_back("--file-filter=All files | *");
 		return a;
@@ -203,6 +208,7 @@ std::vector<std::string> picker_args(std::string const &what, std::string const 
 	if (in_path("kdialog"))
 	{
 		if (what == "rom") return { "kdialog", "--title", title, "--getexistingdirectory", start.empty() ? "." : start };
+		if (what == "save") return { "kdialog", "--title", title, "--getsavefilename", start.empty() ? "." : start, "*.iso *.img *.hd|Hard disk images" };
 		return { "kdialog", "--title", title, "--getopenfilename", start.empty() ? "." : start,
 			what == "cd" ? "*.iso *.ISO|CD-ROM images (*.iso)\n*|All files" : "*.iso *.ISO *.hd *.HD *.img *.IMG *.hda *.raw|Hard disk images\n*|All files" };
 	}
@@ -268,6 +274,10 @@ struct instance
 	std::string pick_what;           // "" idle, "cd", "hd", "rom"
 	unsigned pick_id = 0;            // SCSI ID the chosen image goes to
 	std::string media_msg;           // transient message in the menu bar (refused image, no chooser)
+	uint64_t hd_serial = 0;          // engine change-set serial last seen (-> mark_dirty)
+	std::thread export_thread;       // "save hard disk with its changes as": copies the image, off the plugin's threads
+	std::atomic<bool> export_done{false};
+	std::string export_result;
 	std::chrono::steady_clock::time_point media_msg_until;
 
 	static instance *of(clap_plugin_t const *p) { return static_cast<instance *>(p->plugin_data); }
@@ -352,15 +362,35 @@ struct instance
 			pick_what.clear();
 			if (choice.empty()) { }                    // cancelled
 			else if (what == "rom") change_setting(eiii::media_slot::rom, choice);
+			else if (what == "save") start_export(pick_id, choice);
 			else change_scsi(pick_id, what == "cd" ? eiii::scsi_kind::cd : eiii::scsi_kind::hd, choice);
 		}
+		if (export_thread.joinable() && export_done) { export_thread.join(); show_media_message(export_result); }
+		if (eng.hd_changes_serial() != hd_serial) { hd_serial = eng.hd_changes_serial(); dirty(); }
+		if (std::string const w = eng.take_warning(); !w.empty()) show_media_message(w);
 		update_menu_status();
+	}
+	std::string current_hd_changes(unsigned id) { return eng.started() ? eng.hd_changes(id) : media.hd_changes[id]; }
+	static size_t change_sectors(std::string const &blob) { return blob.size() > 28 ? (blob.size() - 28) / 516 : 0; }
+	void start_export(unsigned id, std::string const &out)
+	{
+		if (export_thread.joinable()) { show_media_message("still saving the previous image"); return; }
+		std::string const image = media.scsi[id].path, changes = current_hd_changes(id);
+		export_done = false;
+		show_media_message("saving " + base_name(out) + "\xE2\x80\xA6");
+		media_msg_until = std::chrono::steady_clock::now() + std::chrono::hours(1);
+		export_thread = std::thread([this, image, changes, out] {
+			std::string err;
+			export_result = eiii::runtime::write_image_with_changes(image, changes, out, err) ? "saved " + base_name(out) : err;
+			export_done = true;
+		});
 	}
 	void open_picker(std::string const &what, unsigned id)
 	{
 		if (pick.running()) { show_media_message("a file chooser is already open"); return; }
 		std::string cur;
 		if (what == "rom") cur = media.rom_dir;
+		else if (what == "save") { std::string const n = disc_name(media.scsi[id].path); cur = dir_name(media.scsi[id].path) + n + " (saved).iso"; }
 		else if (id < 8 && media.scsi[id].kind != eiii::scsi_kind::none && !media.scsi[id].path.empty()) cur = media.scsi[id].path;
 		else if (what == "cd") cur = media.cd_last_dir.empty() ? dir_name(media.cd()) : media.cd_last_dir;
 		else cur = dir_name(media.hd());
@@ -405,6 +435,12 @@ struct instance
 		{
 			v.push_back(menu_item::info(sid + (id == 1 ? "OS hard disk \xC2\xB7 " : "hard disk \xC2\xB7 ") + t.path));
 			item(id == 1 ? "Change OS hard disk image\xE2\x80\xA6 (restarts)" : "Change hard disk image\xE2\x80\xA6 (restarts)", [this, id] { open_picker("hd", id); });
+			// what the OS wrote (Save Bank, ...): kept with the project; the image file itself is never written
+			size_t const n = change_sectors(current_hd_changes(id));
+			v.push_back(menu_item::sep());
+			v.push_back(menu_item::info(n ? std::to_string(n) + " changed sectors, kept in the project (image file untouched)" : "no changes (Save Bank etc. are kept in the project)"));
+			item("Save disk with its changes as new image\xE2\x80\xA6", [this, id] { open_picker("save", id); }, n > 0);
+			item("Discard changes (restarts)", [this, id] { if (!eng.set_hd_changes(id, "")) show_media_message("busy: try again"); }, n > 0);
 		}
 		else
 		{
@@ -526,6 +562,12 @@ bool state_save(clap_plugin_t const *p, clap_ostream_t const *out)
 	media_line("cd", s->media.cd());
 	for (unsigned id = 4; id < 8; ++id) media_line("scsi" + std::to_string(id), target_text(s->media.scsi[id]));
 	media_line("cem_model", s->media.cem_model);
+	// hard disk change sets (binary, length-prefixed): what the OS saved to the read-only images
+	for (unsigned id : { 1u, 4u, 5u, 6u, 7u })
+	{
+		std::string const blob = s->current_hd_changes(id);
+		if (!blob.empty()) t += "hd_changes " + std::to_string(id) + " " + std::to_string(blob.size()) + "\n" + blob + "\n";
+	}
 	size_t done = 0;
 	while (done < t.size()) { int64_t const n = out->write(out, t.data() + done, t.size() - done); if (n <= 0) return false; done += size_t(n); }
 	return true;
@@ -533,17 +575,31 @@ bool state_save(clap_plugin_t const *p, clap_ostream_t const *out)
 bool state_load(clap_plugin_t const *p, clap_istream_t const *in)
 {
 	instance *const s = instance::of(p);
-	std::string t; char buf[512];
-	for (;;) { int64_t const n = in->read(in, buf, sizeof buf); if (n < 0) return false; if (n == 0) break; t.append(buf, size_t(n)); if (t.size() > 65536) return false; }
+	std::string t;
+	std::vector<char> big(1 << 16);
+	for (;;) { int64_t const n = in->read(in, big.data(), big.size()); if (n < 0) return false; if (n == 0) break; t.append(big.data(), size_t(n)); if (t.size() > (size_t(1) << 30)) return false; }
 	if (t.rfind("eiii-rack-state 1", 0) != 0) return false;
 	size_t pos = 0;
+	bool have_changes[8] = {};
 	while (pos < t.size())
 	{
 		size_t const e = t.find('\n', pos);
 		std::string const ln = t.substr(pos, e == std::string::npos ? std::string::npos : e - pos);
 		pos = e == std::string::npos ? t.size() : e + 1;
 		char id[64]; double v; int pw;
-		if (sscanf(ln.c_str(), "slider %63s %lf", id, &v) == 2) s->ui->set_slider(eiii::panel_find_control(id), v);
+		unsigned hid; unsigned long long hlen;
+		if (sscanf(ln.c_str(), "hd_changes %u %llu", &hid, &hlen) == 2)
+		{
+			if (hlen > t.size() - pos || hid >= 8) return false;
+			std::string const blob = t.substr(pos, size_t(hlen));
+			pos += size_t(hlen);
+			if (pos < t.size() && t[pos] == '\n') ++pos;
+			have_changes[hid] = true;
+			if (blob == s->current_hd_changes(hid)) continue;
+			if (s->eng.started()) { if (!s->eng.set_hd_changes(hid, blob)) s->show_media_message("busy: try again"); }
+			else s->media.hd_changes[hid] = blob;
+		}
+		else if (sscanf(ln.c_str(), "slider %63s %lf", id, &v) == 2) s->ui->set_slider(eiii::panel_find_control(id), v);
 		else if (s->ui->apply_display_state_line(ln.c_str())) { }
 		else if (sscanf(ln.c_str(), "power %d", &pw) == 1) s->eng.power(pw != 0);
 		else if (ln.rfind("media ", 0) == 0)
@@ -573,6 +629,13 @@ bool state_load(clap_plugin_t const *p, clap_istream_t const *in)
 			}
 		}
 	}
+	// a project without changes for a disk: that disk starts clean
+	for (unsigned id : { 1u, 4u, 5u, 6u, 7u })
+		if (!have_changes[id] && !s->current_hd_changes(id).empty())
+		{
+			if (s->eng.started()) s->eng.set_hd_changes(id, "");
+			else s->media.hd_changes[id].clear();
+		}
 	s->saved_display = s->ui->display_state();
 	return true;
 }
@@ -688,6 +751,7 @@ void p_destroy(clap_plugin_t const *p)
 	}
 	gui_destroy(p);
 	s->pick.cancel();
+	if (s->export_thread.joinable()) s->export_thread.join();
 	if (s->timer != CLAP_INVALID_ID && s->host_timer) s->host_timer->unregister_timer(s->host, s->timer);
 	s->eng.shutdown();
 	delete s;
@@ -699,13 +763,21 @@ bool p_activate(clap_plugin_t const *p, double sample_rate, uint32_t, uint32_t m
 	// latency allows for) restarts it from power-on, like switching the unit off and on
 	if (!s->eng.started() || sample_rate != s->sample_rate || max_frames > s->max_frames)
 	{
+		if (s->eng.started())
+		{
+			// restart at the new rate: keep what the OS wrote to the disks
+			s->eng.shutdown();
+			for (unsigned id = 1; id < 8; ++id) s->media.hd_changes[id] = s->eng.hd_changes(id);
+		}
 		eiii::engine_config c;
+		for (unsigned id = 1; id < 8; ++id) c.rt.hd_changes[id] = s->media.hd_changes[id];
 		c.rt.rom_dir = s->media.rom_dir; c.rt.hd_path = s->media.hd(); c.rt.cd_path = s->media.cd(); c.rt.cem_model = s->media.cem_model;
 		for (unsigned id = 4; id < 8; ++id) c.rt.scsi[id] = s->media.scsi[id];
 		c.rt.sample_rate = sample_rate;
 		c.max_block = std::max<uint32_t>(max_frames, 64);
 		c.realtime = true;
 		s->eng.start(c);
+		s->hd_serial = s->eng.hd_changes_serial();
 		s->sample_rate = sample_rate; s->max_frames = std::max<uint32_t>(max_frames, 64);
 		unsigned const lat = s->eng.latency();
 		if (lat != s->latency) { s->latency = lat; if (s->host_latency) s->host_latency->changed(s->host); }

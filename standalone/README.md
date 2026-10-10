@@ -120,6 +120,11 @@ slider sets the input level (assumed law: centre = unity, ±20 dB at the ends, s
 dbx 2155 gain law is not documented); the OS shows "Sample Overload!" for clipped takes.  The input is delayed by the
 reported latency like MIDI and resampled to the rate the OS selects (44 053 or 33 333 Hz).
 
+Hard disks stay read-only: what the OS writes (Save Bank, Save Sample, ...) is kept as a change set over the image.  It
+survives restarts and power cycles, is saved in the CLAP state (a project keeps its own saved banks; a change set only
+applies to the image it was made on), and each hard disk menu can write the disk with its changes to a new image file
+or discard the changes.  The original image files are never modified.
+
 The factory banks receive MIDI on channel 14 (a setting of the bank, changeable on the instrument). A new host sample
 rate restarts the instrument from power-on; deactivate/activate otherwise keeps it running.
 
@@ -140,6 +145,7 @@ rate restarts the instrument from power-on; deactivate/activate otherwise keeps 
 | `build/default/tests/engine_instances` | three concurrent instances: identical inputs give bit-identical audio (reading the panel has no effect), independence |
 | `build/default/tests/media_swap` | runtime media changes through the panel: CD re-insert / eject ("SCSI Hardware Error!") / second disc + Load Bank, extra CD drive at SCSI 4 (Load Bank from D4, hot swap), HD at SCSI 5, refused images, OS HD swap -> restart + boot |
 | `build/default/tests/sampling` | sampling with host audio on the ADC: SAMPLE -> 7 arms, a 1 kHz tone triggers, Enter stops; S01 in sample RAM at 44 053 Hz, stereo, exact period, level, no gaps; Sample Input at the top clips ("Sample Overload!"), at the bottom stays silent; Place Sample; G2 plays 1 kHz, C2 668 Hz |
+| `build/default/tests/hd_changes` | sample, place, Save Bank to D1; the bank (sample at 44 053 Hz, plays on its channel 14) survives restart, power cycle, discard + restore, a new instance from the change set; refused on another image; a new image file written with the changes boots with the bank |
 | `build/default/tests/display_themes` | Contrast knob: click cycles the 5 display themes, drag/wheel change only the current theme's level, each theme renders differently (OLED = true black), state text round trip, machine untouched |
 | `build/default/tools/clap_host_test` | CLAP host: 2 instances, realtime audio + MIDI, GUI create/resize/destroy cycles, rapid presses, slider drags, Contrast clicks -> CLAP state (mark_dirty on the main thread, restored into the second instance); `--media-test`: eject button, drive menu (quick list, scripted file chooser), Settings menu, media states restored into the second instance |
 

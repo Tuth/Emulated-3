@@ -112,6 +112,18 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	midi_timer = std::make_unique<emu_timer>([this](s32) { midi_tick(); });
 	scan_irq_timer = std::make_unique<emu_timer>([mp](s32) { if (mp->scan_count) mp->irq_w(machine_t::SCNINT, 0); });
 	m.scan_timer = scan_irq_timer.get();
+	// hard disk changes kept from an earlier run / a project
+	for (unsigned id = 1; id < 8; ++id)
+	{
+		harddisk_image_device *const h = hd_image(id);
+		if (!h || cfg.hd_changes[id].empty()) continue;
+		std::string e;
+		if (!h->import_changes(cfg.hd_changes[id], e))
+		{
+			warning = "SCSI " + std::to_string(id) + ": " + e + " (not applied)";
+			fprintf(stderr, "eiii: %s\n", warning.c_str());
+		}
+	}
 	order = { cpu.get(), fpu.get(), scsi.get(), hd.get(), hd_img.get(), cd.get(), cd_img.get(), cd_cdda.get() };
 	order.insert(order.end(), extra_order.begin(), extra_order.end());
 	order.insert(order.end(), { hdc.get(), scc.get(), scc_cha.get(), scc_chb.get() });
@@ -239,6 +251,39 @@ void runtime::set_adc_source(std::function<void(double, int16_t[2])> source)
 {
 	if (!source) { m->m.adc_source = nullptr; return; }
 	m->m.adc_source = [src = std::move(source)](double t, s16 *lr) { int16_t v[2] = { 0, 0 }; src(t, v); lr[0] = v[0]; lr[1] = v[1]; };
+}
+
+std::string runtime::hd_changes(unsigned id) const { harddisk_image_device *h = m->hd_image(id); return h ? h->export_changes() : std::string(); }
+size_t runtime::hd_changed_sectors(unsigned id) const { harddisk_image_device *h = m->hd_image(id); return h ? h->changed_sectors() : 0; }
+uint64_t runtime::hd_writes(unsigned id) const { harddisk_image_device *h = m->hd_image(id); return h ? h->writes() : 0; }
+std::string const &runtime::open_warning() const { return m->warning; }
+
+bool runtime::write_image_with_changes(std::string const &image, std::string const &changes, std::string const &out_path, std::string &error)
+{
+	if (out_path == image) { error = "choose a new file: the original image is never modified"; return false; }
+	FILE *in = fopen(image.c_str(), "rb");
+	if (!in) { error = "cannot open " + image; return false; }
+	FILE *out = fopen(out_path.c_str(), "wb");
+	if (!out) { fclose(in); error = "cannot create " + out_path; return false; }
+	std::vector<char> buf(1 << 20);
+	size_t n; uint64_t total = 0; bool ok = true;
+	while ((n = fread(buf.data(), 1, buf.size(), in)) > 0) { if (fwrite(buf.data(), 1, n, out) != n) { ok = false; break; } total += n; }
+	fclose(in);
+	auto le = [&](size_t at, int bytes) { uint64_t v = 0; for (int i = 0; i < bytes; ++i) v |= uint64_t(uint8_t(changes[at + size_t(i)])) << (8 * i); return v; };
+	if (ok && !changes.empty())
+	{
+		if (changes.size() < 28 || changes.compare(0, 8, "EIIIHDC1") != 0 || le(8, 8) != total) { error = "the changes do not belong to " + image; ok = false; }
+		uint64_t const count = ok ? le(24, 4) : 0;
+		if (ok && changes.size() != 28 + count * 516) { error = "hard disk change set is truncated"; ok = false; }
+		for (uint64_t i = 0; ok && i < count; ++i)
+		{
+			size_t const at = size_t(28 + i * 516);
+			if (fseeko(out, off_t(le(at, 4) * 512), SEEK_SET) != 0 || fwrite(changes.data() + at + 4, 1, 512, out) != 512) { error = "write error"; ok = false; }
+		}
+	}
+	if (fclose(out) != 0) ok = false;
+	if (!ok) { if (error.empty()) error = "write error on " + out_path; remove(out_path.c_str()); }
+	return ok;
 }
 
 uint16_t runtime::debug_read16(uint32_t a) const

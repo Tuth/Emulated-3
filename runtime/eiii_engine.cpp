@@ -30,7 +30,7 @@ struct media_request { media_result r; std::function<void(runtime &)> fn; };
 char const *media_slot_name(media_slot s)
 {
 	switch (s) { case media_slot::cd: return "cd"; case media_slot::hd: return "hd"; case media_slot::rom: return "rom_dir";
-	case media_slot::scsi: return "scsi"; case media_slot::cem_model: return "cem_model"; case media_slot::restart: return "restart"; case media_slot::inspect: return "inspect"; }
+	case media_slot::scsi: return "scsi"; case media_slot::cem_model: return "cem_model"; case media_slot::restart: return "restart"; case media_slot::inspect: return "inspect"; case media_slot::hd_changes: return "hd_changes"; }
 	return "?";
 }
 
@@ -92,6 +92,51 @@ bool engine::poll_media_result(media_result &out)
 		default: break;
 		}
 	return true;
+}
+
+bool engine::set_hd_changes(unsigned id, std::string const &changes)
+{
+	auto *rq = new media_request;
+	rq->r.slot = media_slot::hd_changes; rq->r.scsi_id = uint8_t(id); rq->r.path = changes;
+	return queue_media(rq);
+}
+
+std::string engine::hd_changes(unsigned id) const { std::lock_guard<std::mutex> g(m_hd_mutex); return id < 8 ? m_hd_pub[id] : std::string(); }
+std::string engine::take_warning() { std::lock_guard<std::mutex> g(m_hd_mutex); std::string w; w.swap(m_warning); return w; }
+
+void engine::keep_hd_changes()
+{
+	if (!m_rt) return;
+	for (unsigned id = 1; id < 8; ++id)
+		if (m_rt->drive_kind(id) == scsi_kind::hd) m_cfg.rt.hd_changes[id] = m_rt->hd_changed_sectors(id) ? m_rt->hd_changes(id) : std::string();
+}
+
+// all: right after a boot (the change sets now in use); else the ones the OS changed, once writing has paused
+void engine::publish_hd_changes(bool all)
+{
+	int64_t const now = now_ns();
+	for (unsigned id = 1; id < 8; ++id)
+	{
+		bool const hd = m_rt && m_rt->drive_kind(id) == scsi_kind::hd;
+		if (all)
+		{
+			std::string const blob = hd && m_rt->hd_changed_sectors(id) ? m_rt->hd_changes(id) : std::string();
+			m_hd_seen[id] = hd ? m_rt->hd_writes(id) : 0; m_hd_dirty_ns[id] = 0;
+			std::lock_guard<std::mutex> g(m_hd_mutex);
+			if (m_hd_pub[id] != blob) { m_hd_pub[id] = blob; ++m_hd_serial; }
+			continue;
+		}
+		if (!hd) continue;
+		uint64_t const w = m_rt->hd_writes(id);
+		if (w != m_hd_seen[id]) { m_hd_seen[id] = w; m_hd_dirty_ns[id] = now; continue; }
+		if (m_hd_dirty_ns[id] && now - m_hd_dirty_ns[id] > 300'000'000)
+		{
+			m_hd_dirty_ns[id] = 0;
+			std::string blob = m_rt->hd_changes(id);
+			std::lock_guard<std::mutex> g(m_hd_mutex);
+			m_hd_pub[id].swap(blob); ++m_hd_serial;
+		}
+	}
 }
 
 bool engine::inspect(std::function<void(runtime &)> f)
@@ -199,8 +244,14 @@ void engine::apply_media(media_request &rq, bool live)
 	std::string err;
 	bool restart = false, ok = false;
 	runtime *const rt = live ? m_rt.get() : nullptr;
+	if (rt && r.slot != media_slot::inspect) keep_hd_changes();   // a restart below must not lose what the OS wrote
 	switch (r.slot)
 	{
+	case media_slot::hd_changes:
+		ok = r.scsi_id == 1 || (r.scsi_id < 8 && scsi_extra_id(r.scsi_id) && c.scsi[r.scsi_id].kind == scsi_kind::hd);
+		if (!ok) err = "no hard disk at SCSI " + std::to_string(r.scsi_id);
+		else { c.hd_changes[r.scsi_id] = r.path; restart = true; }
+		break;
 	case media_slot::rom:
 		ok = runtime::check_rom_dir(r.path, err);
 		if (ok) { c.rom_dir = r.path; restart = true; }
@@ -224,7 +275,7 @@ void engine::apply_media(media_request &rq, bool live)
 		if (id == 1)
 		{
 			if (r.kind != scsi_kind::hd || r.path.empty()) err = "SCSI 1 is the OS hard disk: choose a hard disk image";
-			else if ((ok = runtime::check_hd_image(r.path, err))) { c.hd_path = r.path; restart = true; }
+			else if ((ok = runtime::check_hd_image(r.path, err))) { if (r.path != c.hd_path) c.hd_changes[1].clear(); c.hd_path = r.path; restart = true; }
 		}
 		else if (id == 3)
 		{
@@ -245,6 +296,7 @@ void engine::apply_media(media_request &rq, bool live)
 			if (ok)
 			{
 				restart = !hot && !(r.kind == t.kind && r.path == t.path && r.kind == scsi_kind::none);
+				if (r.kind != t.kind || r.path != t.path) c.hd_changes[id].clear();   // another disk: its own changes
 				t = { r.kind, r.kind == scsi_kind::none ? std::string() : r.path };
 			}
 		}
@@ -262,6 +314,7 @@ void engine::apply_media(media_request &rq, bool live)
 	if (!boot(berr)) r.error = berr;
 	publish(m_rt != nullptr, berr.c_str());
 	r.restarted = true;
+	if (m_rt && r.slot == media_slot::hd_changes && !m_rt->open_warning().empty()) { r.ok = false; r.error = m_rt->open_warning(); }
 }
 
 void engine::start(engine_config const &cfg)
@@ -276,6 +329,11 @@ void engine::start(engine_config const &cfg)
 	m_quit = false;
 	m_primed = false;
 	m_view = m_cfg.rt;
+	{
+		std::lock_guard<std::mutex> g(m_hd_mutex);
+		for (unsigned id = 0; id < 8; ++id) m_hd_pub[id] = m_cfg.rt.hd_changes[id];
+		++m_hd_serial;
+	}
 	m_power_state = false;
 	m_last_pull_ns = 0;
 	m_thread = std::thread([this] { thread_main(); });
@@ -338,6 +396,8 @@ bool engine::boot(std::string &err)
 	m_rt = std::make_unique<runtime>();
 	if (!m_rt->open(m_cfg.rt, err)) { m_rt.reset(); return false; }
 	m_rt->set_adc_source([this](double t, int16_t lr[2]) { adc_sample(t, lr); });
+	if (!m_rt->open_warning().empty()) { std::lock_guard<std::mutex> g(m_hd_mutex); m_warning = m_rt->open_warning(); }
+	publish_hd_changes(true);
 	m_emu_frames = 0;
 	m_ring_to_emu = -int64_t(m_ring.write_index());
 	return true;
@@ -380,7 +440,7 @@ void engine::thread_main()
 		{
 			m_power_state = want;
 			if (want) { std::string err; status = boot(err) ? "" : err; }
-			else { m_rt.reset(); status = "POWER OFF"; }
+			else { keep_hd_changes(); m_rt.reset(); status = "POWER OFF"; }
 			publish(m_rt != nullptr, status.c_str());
 		}
 		media_request *mq;
@@ -459,7 +519,8 @@ void engine::thread_main()
 		}
 		m_rt->run_until_cycle(cycle_of(target_emu));
 		push();
-		if (m_rt->stop_code() == 2) { status = "emulation stopped (watchdog)"; m_rt.reset(); }
+		if (m_rt->stop_code() == 2) { status = "emulation stopped (watchdog)"; keep_hd_changes(); m_rt.reset(); }
+		else publish_hd_changes(false);
 		publish(m_rt != nullptr, status.c_str());
 		m_emu_seconds = m_rt ? m_rt->seconds() : 0.0;
 
@@ -467,7 +528,11 @@ void engine::thread_main()
 		busy_ns += t1 - t0;
 		if (t1 - t_window > 500'000'000) { m_busy = double(busy_ns) / double(t1 - t_window); busy_ns = 0; t_window = t1; }
 	}
+	keep_hd_changes();
 	m_rt.reset();
+	// the final change sets, for a host that starts the engine again (e.g. at another sample rate)
+	std::lock_guard<std::mutex> g(m_hd_mutex);
+	for (unsigned id = 1; id < 8; ++id) if (m_hd_pub[id] != m_cfg.rt.hd_changes[id]) { m_hd_pub[id] = m_cfg.rt.hd_changes[id]; ++m_hd_serial; }
 }
 
 } // namespace eiii
