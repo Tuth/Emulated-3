@@ -13,10 +13,10 @@ using namespace eiii_test;
 
 int main(int argc, char **argv)
 {
-	if (argc < 2) { fprintf(stderr, "usage: panel_screenshot OUT_PREFIX [--load-bank] [--scales 100,125,150,200] [--off] [--master] [--theme NAME] [--level V] [--crop X0,Y0,X1,Y1] [--exact] [--media-label TEXT]\n"); return 2; }
+	if (argc < 2) { fprintf(stderr, "usage: panel_screenshot OUT_PREFIX [--load-bank] [--scales 100,125,150,200] [--off] [--master] [--theme NAME] [--level V] [--crop X0,Y0,X1,Y1] [--exact] [--menu-bar] [--open-menu KEY]\n"); return 2; }
 	std::string const prefix_arg = argv[1];
 	bool load = false, off = false, master = false, exact = false; std::string scales = "100";
-	std::vector<eiii::lcd_theme> themes; double level = -1; float crop[4] = { 0, 0, 0, 0 }; std::string media_label;
+	std::vector<eiii::lcd_theme> themes; double level = -1; float crop[4] = { 0, 0, 0, 0 }; bool menu_bar = false; std::string open_menu;
 	for (int i = 2; i < argc; ++i)
 	{
 		std::string const a = argv[i];
@@ -28,7 +28,8 @@ int main(int argc, char **argv)
 			while (std::getline(ts, n, ',')) { if (!eiii::lcd_theme_from_name(n.c_str(), th)) { fprintf(stderr, "unknown theme %s\n", n.c_str()); return 2; } themes.push_back(th); }
 		}
 		else if (a == "--level" && i + 1 < argc) level = atof(argv[++i]);
-		else if (a == "--media-label" && i + 1 < argc) { media_label = argv[++i]; for (size_t k; (k = media_label.find("\\n")) != std::string::npos;) media_label.replace(k, 2, "\n"); }
+		else if (a == "--menu-bar") menu_bar = true;
+		else if (a == "--open-menu" && i + 1 < argc) { menu_bar = true; open_menu = argv[++i]; }
 		else if (a == "--crop" && i + 1 < argc) { if (sscanf(argv[++i], "%f,%f,%f,%f", &crop[0], &crop[1], &crop[2], &crop[3]) != 4) { fprintf(stderr, "bad --crop\n"); return 2; } }
 	}
 	rig t(media_config());
@@ -47,7 +48,22 @@ int main(int argc, char **argv)
 		t.pump(0.3);
 	}
 	t.ui.poll();
-	t.ui.set_media_label(media_label);   // what the CLAP plugin shows in the drive slot
+	// a menu bar like the CLAP plugin's (static sample content) to preview its look
+	std::vector<eiii::ui::menu> menus;
+	if (menu_bar)
+	{
+		using eiii::ui::menu_item;
+		auto fixed = [](std::string t) { return [t] { return t; }; };
+		menus.push_back({ "settings", fixed("Settings"), [] { std::vector<menu_item> v; menu_item p; p.label = "Power"; p.checked = true; v.push_back(p);
+			v.push_back({ "Restart (cold boot)" }); v.push_back(menu_item::sep()); menu_item a; a.label = "Analog model V1"; a.checked = true; v.push_back(a);
+			v.push_back({ "Analog model V2" }); return v; } });
+		menus.push_back({ "d1", fixed("D1  HD  EIIIOS2_42_HDImage_96MB.ISO"), [] { return std::vector<menu_item>{ menu_item::info("SCSI 1 · OS hard disk"), { "Change hard disk image\xE2\x80\xA6 (restarts)" } }; } });
+		menus.push_back({ "d3", fixed("D3  CD  EIII.01 Emulator Standards"), [] { std::vector<menu_item> v{ menu_item::info("SCSI 3 · /home/paul/Downloads/EIII.01 Emulator Standards.iso"),
+			{ "Change disc\xE2\x80\xA6" }, { "Eject" }, menu_item::sep() }; menu_item a; a.label = "EIII.01 Emulator Standards"; a.checked = true; v.push_back(a);
+			v.push_back({ "EIII.02 More Emulator Standards" }); v.push_back({ "EIII.07 E-mu Classics" }); return v; } });
+		for (char const *d : { "d4", "d5", "d6", "d7" })
+			menus.push_back({ d, fixed(std::string("D") + d[1] + "  \xE2\x80\x94"), [] { return std::vector<menu_item>{ { "Add CD-ROM drive\xE2\x80\xA6" }, { "Add hard disk\xE2\x80\xA6" } }; } });
+	}
 	if (themes.empty()) themes.push_back(eiii::lcd_theme::stock);
 	printf("LCD:\n%s\nLEDs: {%s}\n", t.lcd().c_str(), t.leds().c_str());
 	for (eiii::lcd_theme const theme : themes)
@@ -60,11 +76,12 @@ int main(int argc, char **argv)
 		while (std::getline(ss, sc, ','))
 		{
 			double const pct = atof(sc.c_str());
-			eiii::ui::panel_view v; int w, h; eiii::ui::panel_view::preferred_size(pct, w, h); v.set_size(w, h);
+			eiii::ui::panel_view v; int w, h; eiii::ui::panel_view::preferred_size(pct, w, h, menu_bar); v.set_menus(menus); v.set_size(w, h);
+			if (!open_menu.empty()) { eiii::ui::canvas tmp; v.render(tmp, t.ui, true); v.open_menu(v.find_menu(open_menu)); }
 			eiii::ui::canvas frame; v.render(frame, t.ui, true);
 			if (crop[2] > crop[0] && crop[3] > crop[1])
 			{
-				float const s = v.scale(), ox = (w - eiii::ui::panel_w * s) * .5f, oy = (h - eiii::ui::panel_h * s) * .5f;
+				float const s = v.scale(), ox = (w - eiii::ui::panel_w * s) * .5f, oy = (h - eiii::ui::panel_view::total_h(menu_bar) * s) * .5f + (menu_bar ? eiii::ui::menu_bar_h * s : 0.f);
 				int const x0 = std::max(0, int(ox + crop[0] * s)), y0 = std::max(0, int(oy + crop[1] * s));
 				int const x1 = std::min(w, int(ox + crop[2] * s)), y1 = std::min(h, int(oy + crop[3] * s));
 				eiii::ui::canvas cut; cut.resize(x1 - x0, y1 - y0);

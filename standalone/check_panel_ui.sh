@@ -20,7 +20,7 @@ fi
 if [ -n "${DISPLAY:-}" ] && [ -f build/pic/EIII-Rack.clap ]; then
 	rep=/tmp/eiii_rack_report_$$.txt; rm -f $rep
 	if EIII_AUTOLOAD_BANK=44 EIII_AUTOLOAD_PRESET=1 EIII_RACK_REPORT=$rep $B/tools/clap_host_test build/pic/EIII-Rack.clap --instances 2 --seconds 40 --gui-cycles 6 --media-test > /tmp/eiii_panel_$$.log 2>&1; then
-		echo "PASS CLAP host: $(grep 'GUI cycles' /tmp/eiii_panel_$$.log); $(grep -c '^PASS media' /tmp/eiii_panel_$$.log) media checks; $(grep -c . $rep) instances; underruns: $(grep -o 'underruns [0-9]*' $rep | tr '\n' ' ')"
+		echo "PASS CLAP host: $(grep 'GUI cycles' /tmp/eiii_panel_$$.log); $(grep -cE '^PASS (media|menu)' /tmp/eiii_panel_$$.log) media/menu checks; $(grep -c . $rep) instances; underruns: $(grep -o 'underruns [0-9]*' $rep | tr '\n' ' ')"
 	else echo "FAIL CLAP host"; tail -20 /tmp/eiii_panel_$$.log; fail=1; fi
 	rm -f $rep
 else echo "SKIP CLAP host GUI test (no DISPLAY or plugin not built: make plugin)"; fi

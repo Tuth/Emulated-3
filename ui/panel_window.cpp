@@ -10,7 +10,7 @@ bool panel_window::open(unsigned long parent, int w, int h, std::string &error)
 	m_close = false;
 	m_view.set_size(w, h);
 	if (!m_win.open(parent, w, h, "E-mu Emulator III", error)) return false;
-	if (!parent) m_win.set_aspect(int(panel_w), int(panel_h));
+	if (!parent) m_win.set_aspect(int(panel_w), int(panel_view::total_h(m_view.has_menu_bar())));
 	m_win.cb.down = [this](int x, int y, int b) { m_view.mouse_down(float(x), float(y), b, m_ui); };
 	m_win.cb.up = [this](int x, int y, int b) { m_view.mouse_up(float(x), float(y), b, m_ui); };
 	m_win.cb.move = [this](int x, int y) { m_view.mouse_move(float(x), float(y), m_ui); };

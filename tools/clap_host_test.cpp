@@ -2,8 +2,9 @@
 //   * N instances, each with its own realtime audio thread (256-frame blocks at 48 kHz, MIDI note events on ch 14)
 //   * main thread = GUI thread: host timers + posix fds, GUI create / set_parent / show / resize / destroy cycles
 //   * rapid button presses and slider drags delivered as X events to the plugin's window while notes play
-//   * --media-test: clicks on the drive area (eject button, then the drive -> scripted chooser: insert $EIII_CD) and
-//     checks the media in the saved state, and a state with another disc state restored into a second instance
+//   * --media-test: the menu bar and the drive area: eject button, drive click -> D3 menu (quick disc list, Change
+//     disc... -> scripted chooser), Settings -> analog model V2 / V1, checked through the saved state; states with
+//     another disc state / an extra CD drive at SCSI 4 restored into a second instance
 // usage: clap_host_test PLUGIN.clap [--instances N] [--seconds S] [--gui-cycles N] [--media-test] [--report FILE]
 // Media through the plugin's own configuration (EIII_ROM_DIR, EIII_HD, EIII_CD, EIII_AUTOLOAD_*).
 #include "clap/clap.h"
@@ -19,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <regex>
 #include <poll.h>
 #include <string>
 #include <sys/stat.h>
@@ -29,6 +31,7 @@
 namespace {
 
 std::thread::id g_main;
+float const bar_h = 26.f;                // the plugin's menu bar above the panel (panel units), eiii::ui::menu_bar_h
 struct plug;
 thread_local plug *t_audio_owner = nullptr;
 
@@ -182,20 +185,27 @@ int main(int argc, char **argv)
 		else if (a == "--gui-cycles" && i + 1 < argc) cycles = atoi(argv[++i]);
 		else if (a == "--media-test") media_test = true;
 	}
-	std::string const test_cd = getenv("EIII_CD") ? getenv("EIII_CD") : "";
+	std::string const test_cd_real = getenv("EIII_CD") ? getenv("EIII_CD") : "";
+	std::string test_cd, test_dir;
 	std::string picker_script;
-	if (media_test && !test_cd.empty())
+	if (media_test && !test_cd_real.empty())
 	{
-		// the plugin's chooser, scripted: the menu answers "cd", the CD file dialog answers $EIII_TEST_CD
+		// the instances start with the CD as a link in a private folder (a known quick list in the drive menus); the
+		// plugin's file chooser, scripted, answers with the real path ($EIII_TEST_CD)
+		char dt[] = "/tmp/eiii_media_XXXXXX";
+		if (!mkdtemp(dt)) { perror("mkdtemp"); return 1; }
+		test_dir = dt; test_cd = test_dir + "/disc.iso";
+		if (symlink(test_cd_real.c_str(), test_cd.c_str()) != 0) { perror("symlink"); return 1; }
+		setenv("EIII_CD", test_cd.c_str(), 1);
 		char tmpl[] = "/tmp/eiii_picker_XXXXXX";
 		int const fd = mkstemp(tmpl);
 		if (fd < 0) { perror("mkstemp"); return 1; }
-		std::string const sh = "#!/bin/sh\necho \"$*\" >> \"$0.log\"\ncase \"$1\" in menu) echo cd;; cd) printf '%s\\n' \"$EIII_TEST_CD\";; *) exit 1;; esac\n";
+		std::string const sh = "#!/bin/sh\necho \"$*\" >> \"$0.log\"\ncase \"$1\" in cd) printf '%s\\n' \"$EIII_TEST_CD\";; *) exit 1;; esac\n";
 		if (write(fd, sh.data(), sh.size()) != ssize_t(sh.size())) return 1;
 		close(fd); chmod(tmpl, 0755);
 		picker_script = tmpl;
 		setenv("EIII_RACK_PICKER", tmpl, 1);
-		setenv("EIII_TEST_CD", test_cd.c_str(), 1);
+		setenv("EIII_TEST_CD", test_cd_real.c_str(), 1);
 	}
 	void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
 	if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
@@ -224,7 +234,7 @@ int main(int argc, char **argv)
 		s->run_audio = true;
 		s->audio = std::thread(audio_thread, s.get());
 		// host window for the embedded GUI
-		s->parent = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 40 + 60 * i, 40 + 300 * i, 1472, 538, 0, 0, 0x202020);
+		s->parent = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 40 + 60 * i, 40 + 300 * i, 1472, 564, 0, 0, 0x202020);
 		XStoreName(dpy, s->parent, ("clap_host_test instance " + std::to_string(i)).c_str());
 		XMapWindow(dpy, s->parent);
 		ps.push_back(std::move(s));
@@ -257,7 +267,7 @@ int main(int argc, char **argv)
 	};
 
 	// phase 1: boot + (optional) autoload with the GUI open on instance 0
-	open_gui(*ps[0], 1472, 538);
+	open_gui(*ps[0], 1472, 564);
 	run_main(std::max(20.0, seconds * 0.5));      // boot + autoload (Load Bank 44 / preset 01) finish before clicking
 	// phase 2: GUI cycles on every instance: create/show/resize/destroy, clicks and slider drags while notes play
 	int clicks = 0, drags = 0, knob_clicks = 0;
@@ -268,7 +278,7 @@ int main(int argc, char **argv)
 		{
 			plug &s = *sp;
 			bool const was_open = s.gui_w > 0 && &s == ps[0].get() && c == 0;
-			if (!was_open) open_gui(s, uint32_t(1472 * scales[c % 6]), uint32_t(538 * scales[c % 6]));
+			if (!was_open) open_gui(s, uint32_t(1472 * scales[c % 6]), uint32_t(564 * scales[c % 6]));
 			run_main(0.3);
 			Window const child = find_child(dpy, s.parent);
 			float const k = float(s.gui_w) / 1472.f;
@@ -277,8 +287,8 @@ int main(int argc, char **argv)
 				for (int rep = 0; rep < 6; ++rep)
 					for (auto [x, y] : { std::pair{ 1102.f, 45.f }, { 559.f, 170.f }, { 464.f, 170.f } })
 					{
-						send_button(dpy, child, int(x * k), int(y * k), true); XFlush(dpy); run_main(0.02);
-						send_button(dpy, child, int(x * k), int(y * k), false); XFlush(dpy); run_main(0.02);
+						send_button(dpy, child, int(x * k), int((y + bar_h) * k), true); XFlush(dpy); run_main(0.02);
+						send_button(dpy, child, int(x * k), int((y + bar_h) * k), false); XFlush(dpy); run_main(0.02);
 						++clicks;
 					}
 			// Contrast knob (host UI): two clicks -> display theme Amber/Red, then a turn (drag up) -> its level
@@ -286,19 +296,19 @@ int main(int argc, char **argv)
 			{
 				for (int rep = 0; rep < 2; ++rep)
 				{
-					send_button(dpy, child, int(652 * k), int(170 * k), true); XFlush(dpy); run_main(0.03);
-					send_button(dpy, child, int(652 * k), int(170 * k), false); XFlush(dpy); run_main(0.05);
+					send_button(dpy, child, int(652 * k), int((170 + bar_h) * k), true); XFlush(dpy); run_main(0.03);
+					send_button(dpy, child, int(652 * k), int((170 + bar_h) * k), false); XFlush(dpy); run_main(0.05);
 					++knob_clicks;
 				}
-				send_button(dpy, child, int(652 * k), int(170 * k), true);
-				for (int st = 1; st <= 6; ++st) { send_motion(dpy, child, int(652 * k), int((170 - st * 5) * k)); XFlush(dpy); run_main(0.01); }
-				send_button(dpy, child, int(652 * k), int(140 * k), false); XFlush(dpy); run_main(0.05);
+				send_button(dpy, child, int(652 * k), int((170 + bar_h) * k), true);
+				for (int st = 1; st <= 6; ++st) { send_motion(dpy, child, int(652 * k), int(((170 - st * 5) + bar_h) * k)); XFlush(dpy); run_main(0.01); }
+				send_button(dpy, child, int(652 * k), int((140 + bar_h) * k), false); XFlush(dpy); run_main(0.05);
 			}
 			// slider drag on the Data slider from bottom to top and back
-			send_button(dpy, child, int(138 * k), int(380 * k), true);
-			for (int st = 0; st <= 20; ++st) { send_motion(dpy, child, int(138 * k), int((380 - st * 6.35f) * k)); XFlush(dpy); run_main(0.01); }
-			for (int st = 20; st >= 0; --st) { send_motion(dpy, child, int(138 * k), int((380 - st * 6.35f) * k)); XFlush(dpy); run_main(0.01); }
-			send_button(dpy, child, int(138 * k), int(380 * k), false); XFlush(dpy);
+			send_button(dpy, child, int(138 * k), int((380 + bar_h) * k), true);
+			for (int st = 0; st <= 20; ++st) { send_motion(dpy, child, int(138 * k), int(((380 - st * 6.35f) + bar_h) * k)); XFlush(dpy); run_main(0.01); }
+			for (int st = 20; st >= 0; --st) { send_motion(dpy, child, int(138 * k), int(((380 - st * 6.35f) + bar_h) * k)); XFlush(dpy); run_main(0.01); }
+			send_button(dpy, child, int(138 * k), int((380 + bar_h) * k), false); XFlush(dpy);
 			++drags;
 			// host-side resize while open
 			uint32_t w = uint32_t(1472 * scales[(c + 1) % 6]), h = 9999;
@@ -325,40 +335,60 @@ int main(int argc, char **argv)
 	if (media_test && !picker_script.empty())
 	{
 		plug &s = *ps[0];
-		open_gui(s, 1472, 538);
+		open_gui(s, 1472, 564);
 		run_main(0.5);
 		Window const child = find_child(dpy, s.parent);
 		float const k = float(s.gui_w) / 1472.f;
-		auto click = [&](float x, float y) { send_button(dpy, child, int(x * k), int(y * k), true); XFlush(dpy); run_main(0.03); send_button(dpy, child, int(x * k), int(y * k), false); XFlush(dpy); };
+		// panel coordinates (y < 0: the menu bar)
+		auto click = [&](float x, float y) { send_button(dpy, child, int(x * k), int((y + bar_h) * k), true); XFlush(dpy); run_main(0.03); send_button(dpy, child, int(x * k), int((y + bar_h) * k), false); XFlush(dpy); run_main(0.1); };
 		auto has = [&](std::string const &line) { return save_state(s.p).find("\n" + line + "\n") != std::string::npos; };
+		auto wait_for = [&](std::string const &line, double secs) { bool ok = false; run_main(secs, [&](double) { if (!ok) ok = has(line); }); return ok || has(line); };
 		bool const before = has("media cd " + test_cd);
 		int const dirty0 = s.state_dirty;
 		click(366, 482);                         // drive eject button
-		run_main(1.0);
-		bool const ejected = has("media cd ");
+		bool const ejected = wait_for("media cd ", 1.0);
 		int const dirty_eject = s.state_dirty - dirty0;
-		click(250, 480);                         // drive door -> chooser menu ("cd") -> file chooser ($EIII_CD)
-		bool remounted = false;
-		run_main(5.0, [&](double) { if (!remounted) remounted = has("media cd " + test_cd); });
+		// drive click -> D3 menu at the click, moved up to fit: info, Insert disc..., Eject, separator, the one disc in
+		// the test folder (5 + 3 x 22 + 9 + 22 + 5 = 107 units -> top at 538 - 4 - 107 = 427)
+		click(250, 480);
+		click(300, 427 + 5 + 3 * 22 + 9 + 11);   // quick list: the disc
+		bool const quick = wait_for("media cd " + test_cd, 2.0);
+		click(250, 480);
+		click(300, 427 + 5 + 22 + 11);           // Change disc... -> scripted chooser prints the real path
+		bool const chosen = wait_for("media cd " + test_cd_real, 5.0);
 		std::string log; { FILE *f = fopen((picker_script + ".log").c_str(), "r"); char b[256]; while (f && fgets(b, sizeof b, f)) log += b; if (f) fclose(f); }
-		bool const ok = before && ejected && remounted && dirty_eject > 0 && log.find("menu") == 0 && log.find("\ncd ") != std::string::npos;
-		printf("%s media: CD in state %d -> eject button -> state without disc %d (mark_dirty %d) -> drive click -> chooser (%s) -> CD in state again %d\n",
-			ok ? "PASS" : "FAIL", before, ejected, dirty_eject, log.empty() ? "not run" : "menu, cd", remounted);
+		bool const ok = before && ejected && quick && chosen && dirty_eject > 0 && log.rfind("cd ", 0) == 0;
+		printf("%s media: CD in state %d -> eject button -> no disc %d (mark_dirty %d) -> drive menu quick list -> disc %d -> Change disc... chooser (%s) -> %d\n",
+			ok ? "PASS" : "FAIL", before, ejected, dirty_eject, quick, log.empty() ? "not run" : "ran", chosen);
 		if (!ok) ++media_fails;
+		// Settings (first menu, x 8..): Power, Restart, separator, Analog V1, Analog V2
+		click(30, -13); click(60, 5 + 2 * 22 + 9 + 22 + 11);
+		bool const v2 = wait_for("media cem_model v2", 3.0);
+		click(30, -13); click(60, 5 + 2 * 22 + 9 + 11);
+		bool const v1 = wait_for("media cem_model v1", 3.0);
+		printf("%s menu bar: Settings -> Analog model V2 %d -> V1 %d\n", v2 && v1 ? "PASS" : "FAIL", v2, v1);
+		if (!(v2 && v1)) ++media_fails;
 		s.gui->destroy(s.p); s.gui_w = 0;
-		// a project state with no disc and the same HD/ROMs restores into instance 1 (hot eject, no restart)
 		if (ps.size() > 1)
 		{
+			// a project state with no disc restores into instance 1 (hot eject, no restart) ...
 			std::string st = save_state(s.p);
 			auto const pos = st.find("\nmedia cd ");
-			st = st.substr(0, pos + 1) + "media cd \n";
-			bool const loaded = load_state(ps[1]->p, st);
+			std::string const no_disc = st.substr(0, pos + 1) + "media cd \n" + st.substr(st.find('\n', pos + 1) + 1);
+			bool const loaded = load_state(ps[1]->p, no_disc);
 			bool done = false;
 			run_main(3.0, [&](double) { if (!done) done = save_state(ps[1]->p).find("\nmedia cd \n") != std::string::npos; });
 			printf("%s media: state without disc loaded into instance 1 -> its CD ejected (load %d)\n", loaded && done ? "PASS" : "FAIL", loaded);
 			if (!(loaded && done)) ++media_fails;
-			load_state(ps[1]->p, save_state(s.p));   // disc back for the rest of the run
-			run_main(1.0);
+			// ... and one with an extra CD-ROM drive at SCSI 4 (restart)
+			std::string const with4 = std::regex_replace(save_state(s.p), std::regex("\nmedia scsi4 [^\n]*"), "\nmedia scsi4 cd:" + test_cd_real);
+			load_state(ps[1]->p, with4);
+			bool d4 = false;
+			run_main(4.0, [&](double) { if (!d4) d4 = save_state(ps[1]->p).find("\nmedia scsi4 cd:" + test_cd_real + "\n") != std::string::npos; });
+			printf("%s media: state with a CD-ROM drive at SCSI 4 restored into instance 1 (%d)\n", d4 ? "PASS" : "FAIL", d4);
+			if (!d4) ++media_fails;
+			load_state(ps[1]->p, save_state(s.p));   // instance 0's media back for the rest of the run
+			run_main(2.0);
 		}
 		unlink(picker_script.c_str()); unlink((picker_script + ".log").c_str());
 	}
@@ -405,6 +435,7 @@ int main(int argc, char **argv)
 	}
 	for (auto &sp : ps) { sp->run_audio = false; sp->audio.join(); sp->p->deactivate(sp->p); sp->p->destroy(sp->p); XDestroyWindow(dpy, sp->parent); }
 	XCloseDisplay(dpy);
+	if (!test_dir.empty()) { unlink(test_cd.c_str()); rmdir(test_dir.c_str()); }
 	entry->deinit();
 	dlclose(lib);
 	printf("%s\n", fails ? "FAIL" : "OK");

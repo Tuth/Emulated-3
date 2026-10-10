@@ -99,8 +99,20 @@ There are no plugin parameters — the panel is the instrument. Media come from 
     rom_dir = /path/to/roms
     hd      = /path/to/EIII_OS242_96MB.hd
     cd      = /path/to/EIII.01 Emulator Standards.iso
+    scsi4   = cd:/path/to/EIII.02 More Emulator Standards.iso   # optional extra drives D4..D7:
+    scsi5   = hd:/path/to/samples.img                          #   cd:PATH, cd: (no disc), hd:PATH, none
     autoload_bank = 44      # optional: the plugin operates Load Bank / Enter / ... on the panel after power-on
     autoload_preset = 1
+
+These are the defaults of a new instance.  A menu bar above the panel shows and changes the drives at runtime:
+D1 (OS hard disk, SCSI 1), D3 (CD-ROM, SCSI 3) and D4..D7 (extra CD-ROM drives or hard disks; OS 2.42 does not use D2).
+Inserting, changing or ejecting a disc in a CD drive is a hot swap (the OS sees a disc change, as on the real drive);
+adding or removing a drive, changing a hard disk, the boot ROM folder or the analog model (Settings) restarts the unit
+from power-on.  Each CD menu lists the other `.iso` files in the folders of the discs in use for one-click swaps.
+Clicking the floppy drive opens the D3 menu, its eject button ejects the CD.  File choosers run as a separate process
+(`zenity` or `kdialog`; `EIII_RACK_PICKER=prog` is called as `prog cd|hd|rom START` and prints the chosen path).
+The media in use, the analog model and the display settings are saved in the CLAP state, so a project reopens with
+its disks (paths missing on another machine keep that machine's defaults).
 
 The factory banks receive MIDI on channel 14 (a setting of the bank, changeable on the instrument). A new host sample
 rate restarts the instrument from power-on; deactivate/activate otherwise keeps it running.
@@ -120,8 +132,9 @@ rate restarts the instrument from power-on; deactivate/activate otherwise keeps 
 | `build/default/tests/lcd_mapping` | HD44780 2 x 40 DDRAM -> 4 x 20 rows (verified against the manual), shift, cursor, blink, CGRAM |
 | `build/default/tests/panel_functional` | from power-on, only through the PanelUI adapter: Load Bank, Enter, 3, Enter, 44, Enter, 01, MIDI note, Master Volume, Master Tune + Data slider, module LEDs, Supermode, Mode, Play/Stop, Transpose, Record, Erase |
 | `build/default/tests/engine_instances` | three concurrent instances: identical inputs give bit-identical audio (reading the panel has no effect), independence |
+| `build/default/tests/media_swap` | runtime media changes through the panel: CD re-insert / eject ("SCSI Hardware Error!") / second disc + Load Bank, extra CD drive at SCSI 4 (Load Bank from D4, hot swap), HD at SCSI 5, refused images, OS HD swap -> restart + boot |
 | `build/default/tests/display_themes` | Contrast knob: click cycles the 5 display themes, drag/wheel change only the current theme's level, each theme renders differently (OLED = true black), state text round trip, machine untouched |
-| `build/default/tools/clap_host_test` | CLAP host: 2 instances, realtime audio + MIDI, GUI create/resize/destroy cycles, rapid presses, slider drags, Contrast clicks -> CLAP state (mark_dirty on the main thread, restored into the second instance) |
+| `build/default/tools/clap_host_test` | CLAP host: 2 instances, realtime audio + MIDI, GUI create/resize/destroy cycles, rapid presses, slider drags, Contrast clicks -> CLAP state (mark_dirty on the main thread, restored into the second instance); `--media-test`: eject button, drive menu (quick list, scripted file chooser), Settings menu, media states restored into the second instance |
 
 `cd .. && make check` runs the eiii-core unit tests (F-Chip bit-exact vs MAME traces, CEM laws vs the Python reference,
 CEM bit-exact golden).
