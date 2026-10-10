@@ -26,6 +26,9 @@ rgba const c_letterbox = rgba::hex(0x141414);
 
 // LCD geometry (panel units): window and 5x8 dot grid of the 4 x 20 module
 float const lcd_x0 = 147.5f, lcd_y0 = 82.5f, lcd_x1 = 378.f, lcd_y1 = 155.5f;
+// floppy drive: whole unit, the slot (media label line 1), the door (line 2), the eject button
+float const drv_x0 = 112.f, drv_y0 = 419.f, drv_x1 = 413.f, drv_y1 = 510.f;
+float const ej_x0 = 350.f, ej_y0 = 470.f, ej_x1 = 382.f, ej_y1 = 494.f;
 float const dot_pitch = 1.85f, dot_size = 1.62f, char_pitch_x = 11.0f, char_pitch_y = 17.0f;
 
 } // namespace
@@ -111,6 +114,7 @@ panel_view::panel_view()
 	led("led_digital_processing", 1323, 232); led("led_preset_definition", 1154, 405); led("led_analog_processing", 1322, 405);
 
 	{ element e{}; e.kind = element::lcd; e.x = (lcd_x0 + lcd_x1) * .5f; e.y = (lcd_y0 + lcd_y1) * .5f; m_lcd_element = int(m_elements.size()); m_elements.push_back(e); }
+	{ element e{}; e.kind = element::drive; e.x = (drv_x0 + drv_x1) * .5f; e.y = (drv_y0 + drv_y1) * .5f; m_elements.push_back(e); }
 	m_drawn.resize(m_elements.size());
 }
 
@@ -328,6 +332,7 @@ recti panel_view::element_rect(element const &e) const
 	case element::led_lamp: x0 = e.x - 12; x1 = e.x + 12; y0 = e.y - 8; y1 = e.y + 8; break;
 	case element::slider: x0 = e.x - e.r - 4; x1 = e.x + e.r + 4; y0 = e.y_top - e.r - 6; y1 = e.y_bottom + e.r + 8; break;
 	case element::lcd: x0 = lcd_x0; x1 = lcd_x1; y0 = lcd_y0; y1 = lcd_y1; break;
+	case element::drive: x0 = 185; x1 = 317; y0 = 453; y1 = 502; break;     // inside the drive door
 	default: x0 = e.x - e.r - 1.5f; x1 = e.x + e.r + 1.5f; y0 = e.y - e.r - 1.5f; y1 = e.y + e.r + 2.5f; break;
 	}
 	return { int(std::floor(m_xf.X(x0))) - 1, int(std::floor(m_xf.Y(y0))) - 1, int(std::ceil(m_xf.X(x1))) + 1, int(std::ceil(m_xf.Y(y1))) + 1 };
@@ -384,6 +389,25 @@ void panel_view::draw_led(canvas &c, element const &e, bool on)
 	{
 		fill_rect(c, x0, y0, x1, y1, c_led_off, 1.2f * s);
 		fill_line(c, x0 + 1 * s, y0 + 0.7f * s, x1 - 1 * s, y0 + 0.7f * s, 0.5f * s, rgba::hex(0x8a7a76, 0.35f));
+	}
+}
+
+// host UI: the media in use, printed small on the drive door like a disk label (one line per item)
+void panel_view::draw_drive_label(canvas &c, std::string const &label)
+{
+	if (label.empty()) return;
+	std::vector<std::string> items;
+	for (size_t pos = 0; pos <= label.size();)
+	{
+		size_t e = label.find('\n', pos); if (e == std::string::npos) e = label.size();
+		if (e > pos) items.push_back(label.substr(pos, e - pos));
+		pos = e + 1;
+	}
+	for (size_t i = 0; i < items.size() && i < 3; ++i)
+	{
+		std::string t = items[i];
+		if (t.size() > 40) t = t.substr(0, 39) + "~";
+		m_fonts.narrow.draw(c, m_xf.X(190.f), m_xf.Y(468.f + 13.f * float(i)), t, 6.6f * m_s, rgba::hex(0x9aa0a8), 0, 0);
 	}
 }
 
@@ -505,6 +529,7 @@ recti panel_view::render(canvas &frame, panel_adapter &ui, bool full)
 		case element::knob: key = uint32_t(ui.contrast() * 8192) | uint32_t(ui.display_theme()) << 16; break;
 		case element::led_lamp: key = ui.led(e.led) ? 1 : 0; break;
 		case element::lcd: key = lcd_key; break;
+		case element::drive: key = 2166136261u; for (char ch : ui.media_label()) key = (key ^ uint8_t(ch)) * 16777619u; break;
 		}
 		if (m_drawn[i].valid && m_drawn[i].key == key) continue;
 		recti const r = element_rect(e);
@@ -516,6 +541,7 @@ recti panel_view::render(canvas &frame, panel_adapter &ui, bool full)
 		case element::knob: draw_contrast(frame, e, ui.contrast()); break;
 		case element::led_lamp: draw_led(frame, e, key != 0); break;
 		case element::lcd: draw_lcd(frame, ui); break;
+		case element::drive: draw_drive_label(frame, ui.media_label()); break;
 		}
 		m_drawn[i] = { true, key };
 		dirty = unite(dirty, r);
@@ -554,7 +580,12 @@ void panel_view::mouse_down(float x, float y, int button, panel_adapter &ui)
 	if (button != 1 || m_capture >= 0) return;
 	float lx, ly; if (!to_logical(x, y, lx, ly)) return;
 	int const c = hit_test(lx, ly);
-	if (c < 0) return;
+	if (c < 0)
+	{
+		if (on_drive_click && lx >= drv_x0 && lx <= drv_x1 && ly >= drv_y0 && ly <= drv_y1)
+			on_drive_click(lx >= ej_x0 && lx <= ej_x1 && ly >= ej_y0 && ly <= ej_y1);
+		return;
+	}
 	m_capture = c;
 	panel_control const &k = panel_controls[c];
 	if (k.kind == panel_kind::button) { ui.press_button(c); return; }

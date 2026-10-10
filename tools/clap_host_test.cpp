@@ -2,7 +2,9 @@
 //   * N instances, each with its own realtime audio thread (256-frame blocks at 48 kHz, MIDI note events on ch 14)
 //   * main thread = GUI thread: host timers + posix fds, GUI create / set_parent / show / resize / destroy cycles
 //   * rapid button presses and slider drags delivered as X events to the plugin's window while notes play
-// usage: clap_host_test PLUGIN.clap [--instances N] [--seconds S] [--gui-cycles N] [--report FILE]
+//   * --media-test: clicks on the drive area (eject button, then the drive -> scripted chooser: insert $EIII_CD) and
+//     checks the media in the saved state, and a state with another disc state restored into a second instance
+// usage: clap_host_test PLUGIN.clap [--instances N] [--seconds S] [--gui-cycles N] [--media-test] [--report FILE]
 // Media through the plugin's own configuration (EIII_ROM_DIR, EIII_HD, EIII_CD, EIII_AUTOLOAD_*).
 #include "clap/clap.h"
 #include <X11/Xlib.h>
@@ -19,7 +21,9 @@
 #include <map>
 #include <poll.h>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -169,13 +173,29 @@ int main(int argc, char **argv)
 {
 	if (argc < 2) { fprintf(stderr, "usage: clap_host_test PLUGIN.clap [--instances N] [--seconds S] [--gui-cycles N]\n"); return 2; }
 	g_main = std::this_thread::get_id();
-	int ninst = 2, cycles = 6; double seconds = 40;
+	int ninst = 2, cycles = 6; double seconds = 40; bool media_test = false;
 	for (int i = 2; i < argc; ++i)
 	{
 		std::string const a = argv[i];
 		if (a == "--instances" && i + 1 < argc) ninst = atoi(argv[++i]);
 		else if (a == "--seconds" && i + 1 < argc) seconds = atof(argv[++i]);
 		else if (a == "--gui-cycles" && i + 1 < argc) cycles = atoi(argv[++i]);
+		else if (a == "--media-test") media_test = true;
+	}
+	std::string const test_cd = getenv("EIII_CD") ? getenv("EIII_CD") : "";
+	std::string picker_script;
+	if (media_test && !test_cd.empty())
+	{
+		// the plugin's chooser, scripted: the menu answers "cd", the CD file dialog answers $EIII_TEST_CD
+		char tmpl[] = "/tmp/eiii_picker_XXXXXX";
+		int const fd = mkstemp(tmpl);
+		if (fd < 0) { perror("mkstemp"); return 1; }
+		std::string const sh = "#!/bin/sh\necho \"$*\" >> \"$0.log\"\ncase \"$1\" in menu) echo cd;; cd) printf '%s\\n' \"$EIII_TEST_CD\";; *) exit 1;; esac\n";
+		if (write(fd, sh.data(), sh.size()) != ssize_t(sh.size())) return 1;
+		close(fd); chmod(tmpl, 0755);
+		picker_script = tmpl;
+		setenv("EIII_RACK_PICKER", tmpl, 1);
+		setenv("EIII_TEST_CD", test_cd.c_str(), 1);
 	}
 	void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
 	if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
@@ -289,11 +309,66 @@ int main(int argc, char **argv)
 			run_main(0.2);
 		}
 	}
+	struct buf { std::string d; size_t rd = 0; };
+	auto save_state = [](clap_plugin_t const *p) {
+		auto *st = static_cast<clap_plugin_state_t const *>(p->get_extension(p, CLAP_EXT_STATE));
+		buf b; clap_ostream_t os{ &b, [](clap_ostream_t const *o, void const *d, uint64_t n) -> int64_t { static_cast<buf *>(o->ctx)->d.append(static_cast<char const *>(d), n); return int64_t(n); } };
+		return st->save(p, &os) ? b.d : std::string();
+	};
+	auto load_state = [](clap_plugin_t const *p, std::string const &t) {
+		auto *st = static_cast<clap_plugin_state_t const *>(p->get_extension(p, CLAP_EXT_STATE));
+		buf in{ t }; clap_istream_t is{ &in, [](clap_istream_t const *i, void *d, uint64_t n) -> int64_t {
+			buf *b = static_cast<buf *>(i->ctx); size_t const k = std::min<size_t>(n, b->d.size() - b->rd); memcpy(d, b->d.data() + b->rd, k); b->rd += k; return int64_t(k); } };
+		return st->load(p, &is);
+	};
+	int media_fails = 0;
+	if (media_test && !picker_script.empty())
+	{
+		plug &s = *ps[0];
+		open_gui(s, 1472, 538);
+		run_main(0.5);
+		Window const child = find_child(dpy, s.parent);
+		float const k = float(s.gui_w) / 1472.f;
+		auto click = [&](float x, float y) { send_button(dpy, child, int(x * k), int(y * k), true); XFlush(dpy); run_main(0.03); send_button(dpy, child, int(x * k), int(y * k), false); XFlush(dpy); };
+		auto has = [&](std::string const &line) { return save_state(s.p).find("\n" + line + "\n") != std::string::npos; };
+		bool const before = has("media cd " + test_cd);
+		int const dirty0 = s.state_dirty;
+		click(366, 482);                         // drive eject button
+		run_main(1.0);
+		bool const ejected = has("media cd ");
+		int const dirty_eject = s.state_dirty - dirty0;
+		click(250, 480);                         // drive door -> chooser menu ("cd") -> file chooser ($EIII_CD)
+		bool remounted = false;
+		run_main(5.0, [&](double) { if (!remounted) remounted = has("media cd " + test_cd); });
+		std::string log; { FILE *f = fopen((picker_script + ".log").c_str(), "r"); char b[256]; while (f && fgets(b, sizeof b, f)) log += b; if (f) fclose(f); }
+		bool const ok = before && ejected && remounted && dirty_eject > 0 && log.find("menu") == 0 && log.find("\ncd ") != std::string::npos;
+		printf("%s media: CD in state %d -> eject button -> state without disc %d (mark_dirty %d) -> drive click -> chooser (%s) -> CD in state again %d\n",
+			ok ? "PASS" : "FAIL", before, ejected, dirty_eject, log.empty() ? "not run" : "menu, cd", remounted);
+		if (!ok) ++media_fails;
+		s.gui->destroy(s.p); s.gui_w = 0;
+		// a project state with no disc and the same HD/ROMs restores into instance 1 (hot eject, no restart)
+		if (ps.size() > 1)
+		{
+			std::string st = save_state(s.p);
+			auto const pos = st.find("\nmedia cd ");
+			st = st.substr(0, pos + 1) + "media cd \n";
+			bool const loaded = load_state(ps[1]->p, st);
+			bool done = false;
+			run_main(3.0, [&](double) { if (!done) done = save_state(ps[1]->p).find("\nmedia cd \n") != std::string::npos; });
+			printf("%s media: state without disc loaded into instance 1 -> its CD ejected (load %d)\n", loaded && done ? "PASS" : "FAIL", loaded);
+			if (!(loaded && done)) ++media_fails;
+			load_state(ps[1]->p, save_state(s.p));   // disc back for the rest of the run
+			run_main(1.0);
+		}
+		unlink(picker_script.c_str()); unlink((picker_script + ".log").c_str());
+	}
+	else if (media_test) printf("SKIP media test (EIII_CD not set)\n");
+
 	// phase 3: GUIs closed, audio keeps running (audio must not depend on the GUI)
 	double const rms_closed_start = ps[0]->rms;
 	run_main(seconds * 0.25);
 	printf("GUI cycles %d, clicks %d, slider drags %d\n", cycles * ninst, clicks, drags);
-	int fails = 0;
+	int fails = media_fails;
 	for (auto &sp : ps)
 	{
 		plug &s = *sp;

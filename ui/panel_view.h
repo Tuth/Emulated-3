@@ -5,6 +5,7 @@
 #include "raster.h"
 #include "panel/eiii_panel_adapter.h"
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace eiii::ui {
@@ -44,6 +45,9 @@ public:
 	void wheel(float x, float y, int steps, panel_adapter &ui);
 	void focus_lost(panel_adapter &ui);
 
+	// host UI: a click on the drive area of the panel (not a machine input); eject = on the drive's eject button
+	std::function<void(bool eject)> on_drive_click;
+
 	int hit_test(float lx, float ly) const;         // control index at a logical point, -1 if none
 	bool to_logical(float x, float y, float &lx, float &ly) const;
 	bool control_center(int control, float &lx, float &ly) const;   // logical centre of a control (tests)
@@ -51,7 +55,7 @@ public:
 	struct element
 	{
 		int control = -1, led = -1;
-		enum kind_t { button, slider, knob, led_lamp, lcd } kind;
+		enum kind_t { button, slider, knob, led_lamp, lcd, drive } kind;
 		float x = 0, y = 0, r = 0;                  // buttons/knobs: centre, radius; LEDs: centre
 		float y_top = 0, y_bottom = 0;              // sliders: knob centre travel
 	};
@@ -63,6 +67,7 @@ private:
 	void draw_contrast(canvas &c, element const &e, double v);
 	void draw_led(canvas &c, element const &e, bool on);
 	void draw_lcd(canvas &c, panel_adapter &ui);
+	void draw_drive_label(canvas &c, std::string const &label);
 	template <class LIT, class DX, class DY> void draw_lcd_glow(canvas &c, lcd_look const &L, LIT lit, DX dot_x, DY dot_y, float ds, recti box);
 	recti element_rect(element const &e) const;
 	void text(canvas &c, font &f, float lx, float ly_baseline, char const *s, float size, rgba col, float tracking = 0, int align = 0);

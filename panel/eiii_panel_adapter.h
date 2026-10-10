@@ -51,6 +51,9 @@ public:
 	std::string display_state() const;
 	bool apply_display_state_line(char const *line);
 	lcd_font &font() { return m_font; }
+	// host UI: what the drive area of the panel shows (media in use), one item per line; empty = nothing drawn
+	void set_media_label(std::string const &text) { m_media_label = text; }
+	std::string const &media_label() const { return m_media_label; }
 
 private:
 	engine &m_e;
@@ -59,6 +62,7 @@ private:
 	std::vector<double> m_slider;
 	std::vector<bool> m_down;
 	lcd_theme m_theme = lcd_theme::stock;
+	std::string m_media_label;
 	double m_level[lcd_theme_count] = { 0.55, 0.7, 0.7, 0.6, 0.8 };
 };
 

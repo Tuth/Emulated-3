@@ -13,10 +13,10 @@ using namespace eiii_test;
 
 int main(int argc, char **argv)
 {
-	if (argc < 2) { fprintf(stderr, "usage: panel_screenshot OUT_PREFIX [--load-bank] [--scales 100,125,150,200] [--off] [--master] [--theme NAME] [--level V] [--crop X0,Y0,X1,Y1] [--exact]\n"); return 2; }
+	if (argc < 2) { fprintf(stderr, "usage: panel_screenshot OUT_PREFIX [--load-bank] [--scales 100,125,150,200] [--off] [--master] [--theme NAME] [--level V] [--crop X0,Y0,X1,Y1] [--exact] [--media-label TEXT]\n"); return 2; }
 	std::string const prefix_arg = argv[1];
 	bool load = false, off = false, master = false, exact = false; std::string scales = "100";
-	std::vector<eiii::lcd_theme> themes; double level = -1; float crop[4] = { 0, 0, 0, 0 };
+	std::vector<eiii::lcd_theme> themes; double level = -1; float crop[4] = { 0, 0, 0, 0 }; std::string media_label;
 	for (int i = 2; i < argc; ++i)
 	{
 		std::string const a = argv[i];
@@ -28,6 +28,7 @@ int main(int argc, char **argv)
 			while (std::getline(ts, n, ',')) { if (!eiii::lcd_theme_from_name(n.c_str(), th)) { fprintf(stderr, "unknown theme %s\n", n.c_str()); return 2; } themes.push_back(th); }
 		}
 		else if (a == "--level" && i + 1 < argc) level = atof(argv[++i]);
+		else if (a == "--media-label" && i + 1 < argc) { media_label = argv[++i]; for (size_t k; (k = media_label.find("\\n")) != std::string::npos;) media_label.replace(k, 2, "\n"); }
 		else if (a == "--crop" && i + 1 < argc) { if (sscanf(argv[++i], "%f,%f,%f,%f", &crop[0], &crop[1], &crop[2], &crop[3]) != 4) { fprintf(stderr, "bad --crop\n"); return 2; } }
 	}
 	rig t(media_config());
@@ -46,6 +47,7 @@ int main(int argc, char **argv)
 		t.pump(0.3);
 	}
 	t.ui.poll();
+	t.ui.set_media_label(media_label);   // what the CLAP plugin shows in the drive slot
 	if (themes.empty()) themes.push_back(eiii::lcd_theme::stock);
 	printf("LCD:\n%s\nLEDs: {%s}\n", t.lcd().c_str(), t.leds().c_str());
 	for (eiii::lcd_theme const theme : themes)
