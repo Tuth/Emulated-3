@@ -11,6 +11,9 @@ the voice outputs are rendered through a model of the EIII's F-Chip and CEM3387 
 
 > **No E-mu material is included.** This repository has no boot ROMs, no operating system, and no sample or bank data.
 > To use it you need your own EIII boot ROM dumps, an OS 2.42 hard disk image and, optionally, EIII CD-ROM images.
+>
+> **[Download the plugin from Releases](https://github.com/parguinsys/Emulated-3/releases), then follow
+> [INSTALL.md](INSTALL.md)**: where the ROMs, the OS disk and CDs go, first start, and troubleshooting.
 
 ## Features
 
@@ -70,24 +73,11 @@ vendored in `standalone/third_party/mame`. The MAME executable is not needed.
 
 ## Media setup
 
-The plugin reads its default media from `~/.config/eiii/eiii.conf`. The environment variables `EIII_ROM_DIR`, `EIII_HD`
-and `EIII_CD` override it:
-
-    rom_dir = /path/to/roms              # e3-lsboot_ip381a_emu_systems_4088.ic3 + e3-msboot_ip380a_emu_systems_4088.ic4
-    hd      = /path/to/EIII_OS242.hd     # OS 2.42 hard disk image (SCSI 1), raw
-    cd      = /path/to/factory.iso       # optional CD-ROM image (SCSI 3), MODE1/2048 ISO
-    scsi4   = cd:/path/to/another.iso    # optional extra drives D4..D7: cd:PATH, cd: (empty drive), hd:PATH, none
-    cem_model = v1                       # v1 | v2
-    # autoload_bank = 44                 # optional: Load Bank / Enter / ... pressed on the panel after power-on
-    # autoload_drive = 3
-    # autoload_preset = 1
-
-These are the defaults for a new instance. After that, use the menu bar. Disk images are always opened read-only.
+See **[INSTALL.md](INSTALL.md)**: ROM file names and checksums, the OS 2.42 disk image, CD formats, the default
+folders (`~/.local/share/eiii/{roms,hd,cd}`), `eiii.conf` ([example](docs/eiii.conf.example)), the first start, and
+troubleshooting. The standalone takes the media on its command line (see [standalone/README.md](standalone/README.md)).
 
 The factory banks receive MIDI on **channel 14** (a setting stored in each bank).
-
-The standalone takes the same media on its command line. See [standalone/README.md](standalone/README.md) for every
-option, the GUI, and the regression suite.
 
 ## Repository layout
 

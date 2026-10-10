@@ -31,7 +31,7 @@
 
 namespace {
 
-#define EIII_STANDALONE_VERSION "0.9.0 (OS 2.42 runtime; MAME-equivalent boot/SCSI/panel; software CEM)"
+#define EIII_STANDALONE_VERSION "0.1.0-beta (OS 2.42 runtime; MAME-equivalent boot/SCSI/panel; software CEM)"
 
 struct options_t
 {
@@ -60,7 +60,8 @@ void print_help()
 "usage: eiii-standalone --hard OS_HD_IMAGE [options]\n\n"
 "media / firmware\n"
 "  --rom-dir DIR          boot ROM directory (default $EIII_ROM_DIR, else ./roms):\n"
-"                           e3-lsboot_ip381a_emu_systems_4088.ic3, e3-msboot_ip380a_emu_systems_4088.ic4\n"
+"                           e3-lsboot_ip381a_emu_systems_4088.ic3 + e3-msboot_ip380a_emu_systems_4088.ic4\n"
+"                           (or EIII_IP381A_L.Bin + EIII_IP380A_R.Bin; any letter case)\n"
 "  --hard IMAGE           SCSI ID 1 hard disk image (opened read-only; writes kept in RAM)\n"
 "  --cdrom ISO            SCSI ID 3 CD-ROM image (read-only)\n"
 "live use\n"

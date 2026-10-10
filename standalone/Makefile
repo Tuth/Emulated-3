@@ -74,7 +74,7 @@ plugin:
 	$(MAKE) BUILD=build/pic OPT="-O2 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden" build/pic/EIII-Rack.clap
 	@echo "CLAP plugin: $(CURDIR)/build/pic/EIII-Rack.clap"
 $(BUILD)/EIII-Rack.clap: $(BUILD)/obj/eiii_clap.o $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a ../plugin/exports.map
-	$(CXX) -shared -o $@ $(BUILD)/obj/eiii_clap.o $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a \
+	$(CXX) -shared $(PLUGIN_LDFLAGS) -o $@ $(BUILD)/obj/eiii_clap.o $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a \
 	       -Wl,--version-script=../plugin/exports.map -Wl,--exclude-libs,ALL -Wl,-z,defs $(LDLIBS_X) -lasound -lpthread
 -include $(BUILD)/obj/eiii_clap.d
 
@@ -114,13 +114,49 @@ $(BUILD)/obj $(BUILD)/softfloat:
 -include $(OBJ:.o=.d)
 
 release:
-	$(MAKE) BUILD=build/release OPT="-O2 -DNDEBUG" OUT=build/release/eiii-standalone build/release/eiii-standalone
+	$(MAKE) BUILD=build/release OPT="-O2 -DNDEBUG" LDFLAGS="-static-libstdc++ -static-libgcc" OUT=build/release/eiii-standalone build/release/eiii-standalone
 	mkdir -p dist
 	cp build/release/eiii-standalone dist/eiii-standalone
 	strip dist/eiii-standalone
 	cp README.md dist/README.md
 	cd dist && sha256sum eiii-standalone README.md > SHA256SUMS
 	@ls -la dist; echo "release binary: $(CURDIR)/dist/eiii-standalone"
+# Release archive: CLAP plugin + standalone (C++ runtime linked statically: needs glibc >= 2.38, libX11, libXext,
+# libasound), docs, licences.  -> dist/Emulated-3-v$(VERSION)-linux-x86_64.tar.gz
+VERSION  ?= 0.1.0-beta
+PKG       = Emulated-3-v$(VERSION)-linux-x86_64
+package: release
+	$(MAKE) BUILD=build/pic-release OPT="-O2 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden" \
+	        PLUGIN_LDFLAGS="-static-libstdc++ -static-libgcc" build/pic-release/EIII-Rack.clap
+	rm -rf dist/$(PKG) && mkdir -p dist/$(PKG)/licenses
+	cp build/pic-release/EIII-Rack.clap dist/$(PKG)/ && strip --strip-unneeded dist/$(PKG)/EIII-Rack.clap
+	cp dist/eiii-standalone dist/$(PKG)/
+	cp ../README.md ../INSTALL.md ../LICENSE ../docs/eiii.conf.example dist/$(PKG)/
+	cp README.md dist/$(PKG)/STANDALONE.md
+	cp ../third_party/clap/LICENSE dist/$(PKG)/licenses/CLAP-MIT.txt
+	cp ../third_party/stb/LICENSE dist/$(PKG)/licenses/stb.txt
+	cp ../third_party/fonts/OFL-ArchivoNarrow.txt ../third_party/fonts/OFL-NotoSans.txt dist/$(PKG)/licenses/
+	sed 's|/home/[^`]*/mame|a local MAME checkout|' $(MAME)/PROVENANCE.md > dist/$(PKG)/licenses/MAME-PROVENANCE.md
+	cp $(MAME)/3rdparty/softfloat3/COPYING.txt dist/$(PKG)/licenses/SoftFloat-COPYING.txt
+	printf '%s\n' 'MAME device sources used by this build (CPU, FPU, SCSI, serial): BSD-3-Clause.' \
+	  'Copyright (c) the MAME authors (see https://github.com/mamedev/mame).' '' \
+	  'Redistribution and use in source and binary forms, with or without modification, are permitted provided that the' \
+	  'following conditions are met: (1) Redistributions of source code must retain the above copyright notice, this list' \
+	  'of conditions and the following disclaimer. (2) Redistributions in binary form must reproduce the above copyright' \
+	  'notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided' \
+	  'with the distribution. (3) Neither the name of the copyright holder nor the names of its contributors may be used' \
+	  'to endorse or promote products derived from this software without specific prior written permission.' '' \
+	  'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,' \
+	  'INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE' \
+	  'DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,' \
+	  'SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR' \
+	  'SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,' \
+	  'WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE' \
+	  'USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.' > dist/$(PKG)/licenses/MAME-BSD-3-Clause.txt
+	cd dist/$(PKG) && sha256sum EIII-Rack.clap eiii-standalone > SHA256SUMS
+	cd dist && tar czf $(PKG).tar.gz $(PKG) && sha256sum $(PKG).tar.gz > $(PKG).tar.gz.sha256
+	@ls -la dist/$(PKG) dist/$(PKG).tar.gz
+
 debug:
 	$(MAKE) BUILD=build/debug OPT="-O0 -g" OUT=build/debug/eiii-standalone build/debug/eiii-standalone
 asan:
@@ -142,4 +178,4 @@ clean:
 	rm -rf build eiii-standalone
 distclean: clean
 	rm -rf dist
-.PHONY: eiii-standalone release debug asan check clean distclean plugin
+.PHONY: eiii-standalone release package debug asan check clean distclean plugin
