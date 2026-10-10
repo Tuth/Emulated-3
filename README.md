@@ -1,5 +1,7 @@
 # Emulated-3
 
+**Beta.** Expect rough edges, and please report what you find.
+
 An unofficial emulator of the **E-mu Emulator III** sampler, as a **CLAP instrument plugin** and a **Linux
 standalone**. It runs the original EIII boot ROM and **Operating System 2.42** unmodified, from your own disk images.
 You operate it from the original rack front panel (the panel is the instrument), MIDI goes to the emulated MIDI IN, and
@@ -21,8 +23,13 @@ the voice outputs are rendered through a model of the EIII's F-Chip and CEM3387 
   - Insert, change or eject a CD while the unit runs: a hot swap the OS sees as a real disc change.
   - A one-click list of the other `.iso` files next to the discs in use.
   - Clicking the floppy drive opens the D3 menu; its eject button ejects the CD.
-- **Projects reopen with their setup.** The drives, the analog model and the display settings are saved in the CLAP
-  state.
+- **Sampling.** The plugin's stereo **Sample In** port is the EIII's line input. In the SAMPLE module, 7 (Arm Sampling)
+  waits for the threshold, Enter stops, and 6 (Place Sample) maps the take onto keys. All of this runs the original
+  sampling code at 44 053 / 33 333 Hz. The panel's Sample Input slider sets the level.
+- **Saved banks stay with the project.** Disk images are never written. What the OS saves (Save Bank, ...) is kept as
+  a change set inside the project, and can be written into a new image file or discarded.
+- **Projects reopen with their setup.** The drives, the hard disk changes, the analog model and the display settings
+  are saved in the CLAP state.
 - **Display themes.** Click the Contrast knob to cycle Stock STN, Blue/White, Amber/Red, VFD and OLED. Turning the knob
   sets each theme's level.
 
@@ -41,7 +48,7 @@ the voice outputs are rendered through a model of the EIII's F-Chip and CEM3387 
 | | |
 |---|---|
 | Linux x86-64 | CLAP plugin (X11 GUI) and standalone (ALSA audio/MIDI): working, regression-tested |
-| Sampling into the instrument | in progress (audio input → the EIII's own sampling code) |
+| Sampling into the instrument | working (beta): Sample In port → the EIII's own sampling code; saved banks kept with the project |
 | Windows, macOS, VST3 | planned |
 
 Tested hosts: Qtractor, and the `clap-validator` and `tools/clap_host_test` test hosts. With Qtractor on PipeWire,
