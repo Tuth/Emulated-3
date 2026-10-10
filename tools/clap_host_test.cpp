@@ -1,5 +1,6 @@
 // clap_host_test: a minimal CLAP host for the EIII Rack plugin's GUI/threading regressions.
-//   * N instances, each with its own realtime audio thread (256-frame blocks at 48 kHz, MIDI note events on ch 14)
+//   * N instances, each with its own realtime audio thread (256-frame blocks at 48 kHz, MIDI note events on ch 14,
+//     a quiet tone on the Sample In port)
 //   * main thread = GUI thread: host timers + posix fds, GUI create / set_parent / show / resize / destroy cycles
 //   * rapid button presses and slider drags delivered as X events to the plugin's window while notes play
 //   * --media-test: the menu bar and the drive area: eject button, drive click -> D3 menu (quick disc list, Change
@@ -114,7 +115,11 @@ void audio_thread(plug *s)
 	clap_audio_buffer_t out{ chans, nullptr, 2, 0, 0 };
 	event_list el; clap_input_events_t in{ &el, ev_size, ev_get };
 	clap_output_events_t oe{ nullptr, out_try_push };
-	clap_process_t pr{}; pr.frames_count = n; pr.audio_outputs = &out; pr.audio_outputs_count = 1; pr.in_events = &in; pr.out_events = &oe; pr.steady_time = 0;
+	// Sample In: a quiet 440 Hz tone (exercises the realtime input path; nothing records it unless the OS is armed)
+	std::vector<float> il(n), ir(n);
+	float *ichans[2] = { il.data(), ir.data() };
+	clap_audio_buffer_t inb{ ichans, nullptr, 2, 0, 0 };
+	clap_process_t pr{}; pr.frames_count = n; pr.audio_outputs = &out; pr.audio_outputs_count = 1; pr.audio_inputs = &inb; pr.audio_inputs_count = 1; pr.in_events = &in; pr.out_events = &oe; pr.steady_time = 0;
 	auto next = std::chrono::steady_clock::now();
 	uint64_t blk = 0;
 	double acc = 0; uint64_t cnt = 0;
@@ -134,6 +139,7 @@ void audio_thread(plug *s)
 				el.ev.push_back(e);
 			}
 		}
+		for (uint32_t k = 0; k < n; ++k) il[k] = ir[k] = 0.05f * float(std::sin(2 * M_PI * 440.0 * double(blk * n + k) / 48000.0));
 		auto const t0 = std::chrono::steady_clock::now();
 		s->p->process(s->p, &pr);
 		double const dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -387,7 +393,30 @@ int main(int argc, char **argv)
 			run_main(4.0, [&](double) { if (!d4) d4 = save_state(ps[1]->p).find("\nmedia scsi4 cd:" + test_cd_real + "\n") != std::string::npos; });
 			printf("%s media: state with a CD-ROM drive at SCSI 4 restored into instance 1 (%d)\n", d4 ? "PASS" : "FAIL", d4);
 			if (!d4) ++media_fails;
-			load_state(ps[1]->p, save_state(s.p));   // instance 0's media back for the rest of the run
+			// ... and one with hard disk changes (a one-sector change set made for the OS image): restored, and saved
+			// back out of instance 1 after its restart
+			if (char const *hd = getenv("EIII_HD"))
+			{
+				FILE *f = fopen(hd, "rb");
+				std::string head(65536, '\0');
+				size_t const got = f ? fread(head.data(), 1, head.size(), f) : 0;
+				if (f) { fseeko(f, 0, SEEK_END); }
+				uint64_t const len = f ? uint64_t(ftello(f)) : 0;
+				if (f) fclose(f);
+				uint64_t fp = 1469598103934665603ull;
+				for (size_t i = 0; i < got; ++i) { fp ^= uint8_t(head[i]); fp *= 1099511628211ull; }
+				std::string blob = "EIIIHDC1";
+				auto le = [&](uint64_t v, int n) { for (int i = 0; i < n; ++i) blob += char((v >> (8 * i)) & 0xff); };
+				le(len, 8); le(fp, 8); le(1, 4); le(len / 512 - 1, 4);
+				for (int i = 0; i < 512; ++i) blob += char(i & 0xff);
+				std::string const section = "hd_changes 1 " + std::to_string(blob.size()) + "\n" + blob + "\n";
+				load_state(ps[1]->p, save_state(s.p) + section);
+				bool back = false;
+				run_main(5.0, [&](double) { if (!back) back = save_state(ps[1]->p).find(section) != std::string::npos; });
+				printf("%s media: state with hard disk changes restored into instance 1 and saved back out (%d)\n", back ? "PASS" : "FAIL", back);
+				if (!back) ++media_fails;
+			}
+			load_state(ps[1]->p, save_state(s.p));   // instance 0's media back for the rest of the run (no changes)
 			run_main(2.0);
 		}
 		unlink(picker_script.c_str()); unlink((picker_script + ".log").c_str());

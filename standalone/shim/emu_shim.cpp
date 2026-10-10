@@ -76,6 +76,14 @@ bool harddisk_image_device::load(std::string const &path)
 	// ask the kernel to start reading the OS image into the page cache now (asynchronously), so the boot's SCSI reads
 	// do not wait for the disk while the engine thread must stay ahead of the audio
 	posix_fadvise(fileno(m_f), 0, 0, POSIX_FADV_WILLNEED);
+	{
+		u8 buf[65536];
+		fseek(m_f, 0, SEEK_SET);
+		size_t const n = fread(buf, 1, sizeof buf, m_f);
+		m_fingerprint = 1469598103934665603ull;
+		for (size_t i = 0; i < n; ++i) { m_fingerprint ^= buf[i]; m_fingerprint *= 1099511628211ull; }
+	}
+	m_overlay.clear(); m_writes = 0;
 	// MAME lib/util/harddisk.cpp geometry guess (raw image, skip 0)
 	m_info = {};
 	m_info.sectorbytes = 512;
@@ -106,6 +114,36 @@ bool harddisk_image_device::write(u32 lba, void const *buffer)
 {
 	if (!m_f || u64(lba + 1) * 512 > m_length) return false;
 	auto &v = m_overlay[lba]; v.assign((u8 const *)buffer, (u8 const *)buffer + 512); ++m_writes;
+	return true;
+}
+
+static void put_le(std::string &s, u64 v, int bytes) { for (int i = 0; i < bytes; ++i) s += char((v >> (8 * i)) & 0xff); }
+static u64 get_le(std::string const &s, size_t at, int bytes) { u64 v = 0; for (int i = 0; i < bytes; ++i) v |= u64(u8(s[at + size_t(i)])) << (8 * i); return v; }
+
+std::string harddisk_image_device::export_changes() const
+{
+	std::string b = "EIIIHDC1";
+	put_le(b, m_length, 8); put_le(b, m_fingerprint, 8); put_le(b, m_overlay.size(), 4);
+	b.reserve(b.size() + m_overlay.size() * 516);
+	for (auto const &[lba, data] : m_overlay) { put_le(b, lba, 4); b.append(reinterpret_cast<char const *>(data.data()), 512); }
+	return b;
+}
+
+bool harddisk_image_device::import_changes(std::string const &b, std::string &error)
+{
+	if (b.size() < 28 || b.compare(0, 8, "EIIIHDC1") != 0) { error = "not an EIII hard disk change set"; return false; }
+	u64 const len = get_le(b, 8, 8), fp = get_le(b, 16, 8), n = get_le(b, 24, 4);
+	if (len != m_length || fp != m_fingerprint) { error = "the saved hard disk changes belong to a different disk image"; return false; }
+	if (b.size() != 28 + n * 516) { error = "hard disk change set is truncated"; return false; }
+	std::map<u32, std::vector<u8>> ov;
+	for (u64 i = 0; i < n; ++i)
+	{
+		size_t const at = size_t(28 + i * 516);
+		u32 const lba = u32(get_le(b, at, 4));
+		if (u64(lba + 1) * 512 > m_length) { error = "hard disk change set addresses sectors past the image"; return false; }
+		ov[lba].assign(b.begin() + long(at + 4), b.begin() + long(at + 516));
+	}
+	m_overlay = std::move(ov);
 	return true;
 }
 

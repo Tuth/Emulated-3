@@ -9,6 +9,9 @@
 #include "eiii_runtime.h"
 #include "eiii_lockfree.h"
 #include <atomic>
+#include <mutex>
+#include <functional>
+#include <vector>
 #include <memory>
 #include <string>
 #include <thread>
@@ -29,7 +32,7 @@ struct panel_input
 //   cd, hd : the unit's own drives (SCSI 3 CD-ROM, SCSI 1 OS hard disk)      rom: boot ROM folder
 //   scsi   : SCSI ID 1, 3 or an extra drive at 4..7 (Dn in the OS)                                  cem_model: "v1" | "v2" (analog model)
 //   restart: cold boot with the current configuration
-enum class media_slot : uint8_t { cd, hd, rom, scsi, cem_model, restart };
+enum class media_slot : uint8_t { cd, hd, rom, scsi, cem_model, restart, inspect, hd_changes };
 char const *media_slot_name(media_slot s);          // "cd", "hd", "rom_dir", "scsi", "cem_model", "restart"
 
 struct media_request;
@@ -93,10 +96,24 @@ public:
 	bool poll_media_result(media_result &out);                  // next completed request, if any
 	// configuration in use as last reported (main thread view)
 	std::string media_path(media_slot slot) const;              // cd, hd, rom, cem_model
+	// Hard disk changes (what the OS wrote to SCSI 1 / extra hard disks; the images stay read-only).  They survive
+	// restarts and power cycles of the unit; a new image at that ID starts without changes.
+	bool set_hd_changes(unsigned scsi_id, std::string const &changes);   // restore ("" = discard); the unit restarts
+	std::string hd_changes(unsigned scsi_id) const;    // main thread: the latest published change set ("" = none)
+	uint64_t hd_changes_serial() const { return m_hd_serial.load(); }   // increments when a change set is published
+	std::string take_warning();                        // main thread: e.g. a change set that did not match its image
+
+	// diagnostics / tests: run f with the machine on the engine thread; the outcome arrives as a media_result
+	// (slot inspect; ok = false when no machine is running)
+	bool inspect(std::function<void(runtime &)> f);
 	scsi_target scsi(unsigned scsi_id) const;                   // any ID 1..7
 
 	// ---- audio thread ----
 	unsigned latency() const { return m_latency; }
+	// Sampling input for this block (call before pull() for the same block; null = silence).  Delayed by latency()
+	// like MIDI; the engine resamples it to the conversions the OS performs (44 053 / 33 333 Hz) and applies the
+	// front panel's Sample Input level.
+	void input(float const *left, float const *right, size_t frames);
 	void set_realtime(bool rt) { m_realtime = rt; }  // offline (false): pull() waits for the engine
 	bool midi(uint32_t block_offset, uint8_t const *bytes, uint8_t n);   // call before pull() for that block
 	size_t pull(float *left, float *right, size_t frames);               // always fills `frames` (silence on underrun)
@@ -126,6 +143,18 @@ private:
 	spsc_queue<midi_record> m_midi{4096};
 	spsc_queue<panel_record> m_panel{1024};
 	triple_buffer<panel_snapshot> m_snap;
+	audio_ring m_in{1 << 15};                // sampling input from the audio thread; index = ring frame - latency
+	std::vector<float> m_in_buf;             // engine thread: drained input (interleaved L/R) ...
+	uint64_t m_in_end = 0;                   // ... ending at this input index
+	void drain_input();
+	void keep_hd_changes();                  // engine thread: copy the running machine's change sets into m_cfg
+	void publish_hd_changes(bool all);       // engine thread
+	mutable std::mutex m_hd_mutex;           // guards m_hd_pub, m_warning (main <-> engine thread, never audio)
+	std::string m_hd_pub[8], m_warning;
+	std::atomic<uint64_t> m_hd_serial{0};
+	uint64_t m_hd_seen[8] = {};              // engine thread: write counts last published
+	int64_t m_hd_dirty_ns[8] = {};
+	void adc_sample(double t, int16_t lr[2]);
 	spsc_queue<media_request *> m_media_in{16}, m_media_out{16};   // main -> engine -> main (ownership travels)
 	unsigned m_media_inflight = 0;           // main thread
 	runtime_config m_view;                   // main thread: configuration in use as last reported

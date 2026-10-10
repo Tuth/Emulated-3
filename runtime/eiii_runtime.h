@@ -8,6 +8,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ struct runtime_config
 	std::string hd_path;            // OS 2.42 hard disk image (SCSI ID 1), opened read-only
 	std::string cd_path;            // optional CD-ROM image (SCSI ID 3)
 	scsi_target scsi[8];            // extra drives at IDs 4..7 (scsi_extra_id); IDs 1 and 3 are hd_path / cd_path
+	std::string hd_changes[8];      // hard disk change sets to apply at open (SCSI 1, extra HDs), see hd_changes()
 	std::string cem_model = "v1";   // "v1" | "v2"
 	std::string cem_calib;          // v2 calibration file (optional)
 	double sample_rate = 48000.0;   // output rate of the software backend
@@ -82,6 +84,25 @@ public:
 	uint16_t adc_input(unsigned input) const;
 	void midi_in(uint8_t const *bytes, size_t n);         // bytes into the Z85230 channel A RxD at 31250 baud
 	void schedule_midi(double t_seconds, std::vector<uint8_t> bytes);   // scheduled MIDI (regressions)
+
+	// ---- sampling input ----
+	// The ADC board's analog input: called on the instance's thread at each conversion the OS performs (44 053 or
+	// 33 333 Hz, paced by ADC WAIT), with the conversion time in emulated seconds; returns the L/R ADC words.
+	void set_adc_source(std::function<void(double t_seconds, int16_t lr[2])> source);
+
+	// ---- hard disk changes ----
+	// Hard disk images are opened read-only; what the OS writes (Save Bank, ...) is kept as a change set over the image.
+	// It can be taken out (e.g. into a project), put back into a later instance of the same image, or written into a
+	// new image file.  A change set only applies to the image it was made on (length + fingerprint).
+	std::string hd_changes(unsigned scsi_id) const;     // "" when the ID has no hard disk
+	size_t hd_changed_sectors(unsigned scsi_id) const;
+	uint64_t hd_writes(unsigned scsi_id) const;          // sector writes since open (changes when the OS writes)
+	std::string const &open_warning() const;            // e.g. a change set that did not match its image (dropped)
+	static bool write_image_with_changes(std::string const &image, std::string const &changes, std::string const &out_path, std::string &error);
+
+	// ---- diagnostics (tests): read emulated memory as the CPU sees it, no side effects on RAM / sample RAM ----
+	uint16_t debug_read16(uint32_t address) const;
+	uint32_t debug_read32(uint32_t address) const;   // little-endian, as the NS32016
 
 	// ---- media (SCSI ID 3 CD-ROM drive) ----
 	// A disc change as on the real drive: the next command after a mount reports UNIT ATTENTION (new medium), an empty
