@@ -43,3 +43,22 @@ Display settings are stored in `%APPDATA%/eiii/gui.state`.
 * Window resizing is supported; aspect ratio is not constrained.
 * The Windows window backend supports standalone and VST3 child windows.
 * Use simple ASCII media paths for this first build; Unicode path support needs follow-up.
+
+## 0.2.4 standalone GUI and persistent OS settings
+
+Double-click `eiii-standalone.exe` to open the Windows GUI even without media configured. Choose a boot ROM BIN in Settings, then the OS disk in D1 HD. Native file dialogs do not change the current working directory. Settings, D1 HD and D3 CD provide the media controls; Audio and MIDI In list available WinMM devices and allow live device changes. A refused device change retains the previous device. Settings offers zoom, cold restart and analog model selection.
+
+Standalone files are independent of VST3:
+
+- `%APPDATA%/eiii/eiii-standalone.conf`: paths, device choices, analog model, window width.
+- `%APPDATA%/eiii/eiii-standalone-gui.state`: display theme and contrast.
+- `%APPDATA%/eiii/eiii-standalone-hd1.state`: OS disk writes, including settings the original OS saves. Other HD sidecars use their SCSI ID.
+- `%APPDATA%/eiii/eiii-standalone-watchdog.log`: rare stop diagnostics.
+
+The standalone never reads or changes `eiii-vst3.conf`. Existing command-line media/device arguments override its saved defaults when using `--gui`; headless runs keep their previous command-line behavior. `--scale` overrides remembered width.
+
+Paths and successful device/media choices are saved automatically. Disk changes are checkpointed after the engine publishes them and flushed at normal exit. The source HD remains read-only; the disk sidecar is checked against the image fingerprint. On restart the OS and settings are read from the image plus that sidecar, not from an invented NVRAM/RAM snapshot. The original OS was tested changing MIDI Globals Poly to Omni: it writes disk sectors and a fresh instance restored from the sidecar retains Omni. Load the desired bank again after power-on.
+
+Floppy support is still a separate milestone: the current WD1772 path only models the no-disk boot behavior. Real D0 access needs command/data registers, sector geometry, data-request timing, IRQ, motor and side selection, then validation with an original EIII floppy image. CD/HD images are not floppy media.
+
+Validation: independent configuration/binary sidecar regression, original-OS Globals persistence across a fresh engine, actual menu rendering without an OS window, native VST3 sampling/MIDI/bank/state regression, and Windows cross builds. Windows file dialogs/device changes still require host-machine confirmation. Linux X11 window execution was unavailable in this environment; menu rendering was validated offscreen. The new file chooser and device-list GUI is intended for Windows.

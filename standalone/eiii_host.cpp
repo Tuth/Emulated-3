@@ -6,6 +6,7 @@
 #include "host_io.h"
 #include "ui_macro.h"
 #include "eiii_gui.h"
+#include "gui_config.h"
 #include <chrono>
 #include <csignal>
 #include <regex>
@@ -31,7 +32,7 @@
 
 namespace {
 
-#define EIII_STANDALONE_VERSION "0.1.0-beta (OS 2.42 runtime; MAME-equivalent boot/SCSI/panel; software CEM)"
+#define EIII_STANDALONE_VERSION "0.2.4-preview (standalone GUI/media settings and persistent OS disk changes)"
 
 struct options_t
 {
@@ -150,6 +151,17 @@ int main(int argc, char **argv)
 	std::string scriptfile;
 	bool rom_only = false;
 	bool gui = false; gui_options go;
+#ifdef _WIN32
+	gui = argc == 1;
+#endif
+	bool gui_defaults = gui;
+	for (int i=1;i<argc;++i) if(std::string(argv[i])=="--gui") gui_defaults=true;
+	if(gui_defaults) {
+		load_gui_defaults(go);
+		if(!env_rom && !go.rom_dir.empty())romdir=go.rom_dir;
+		hdpath=go.hd;cdpath=go.cd;
+		g_opt.audio_out=go.audio_out;g_opt.midi_in=go.midi_in;g_opt.cem_model=go.cem_model;
+	}
 	double cycles = 0;              // 0 = run until stopped (realtime) or until the script/autoload says so
 	for (int i = 1; i < argc; ++i)
 	{
@@ -185,7 +197,7 @@ int main(int argc, char **argv)
 		else if (k == "--no-ftz") g_no_ftz = true;
 		else if (k == "--log-leds") g_log_leds = true;
 		else if (k == "--gui") gui = true;
-		else if (k == "--scale") go.scale = atof(val());
+		else if (k == "--scale") { go.scale = atof(val()); go.view_width = 0; }
 		else if (k == "--quit-after") go.quit_after = atof(val());
 		else if (k == "--screenshot") go.screenshot = val();
 		// debug / regression aids
@@ -214,10 +226,10 @@ int main(int argc, char **argv)
 		}
 		else { fprintf(stderr, "eiii-standalone: unknown option '%s' (see --help)\n", k.c_str()); return 2; }
 	}
-	if (hdpath.empty() && !rom_only) { fprintf(stderr, "eiii-standalone: --hard <OS 2.42 hard disk image> is required (see --help)\n"); return 2; }
+	if (hdpath.empty() && !rom_only && !gui) { fprintf(stderr, "eiii-standalone: --hard <OS 2.42 hard disk image> is required (see --help)\n"); return 2; }
 	if (gui)
 	{
-		go.rom_only = rom_only;
+		go.rom_only = rom_only || hdpath.empty();
 		go.rom_dir = romdir; go.hd = hdpath; go.cd = cdpath; go.cem_model = g_opt.cem_model; go.cem_calib = g_opt.cem_calib;
 		go.midi_in = g_opt.midi_in; go.audio_out = g_opt.audio_out;
 		if (g_opt.period_frames) go.period = g_opt.period_frames;

@@ -9,6 +9,7 @@ struct gui_options
 	unsigned period = 256, periods = 4;
 	int autoload_bank = -1, drive = 3, preset = -1;
 	double scale = 100.0;           // percent of 1472 x 538
+	int view_width = 0;
 	double quit_after = 0;          // emulated seconds (tests); 0 = until the window is closed
 	std::string screenshot;         // PNG of the window contents at exit (tests)
 	bool verbose = false, rom_only = false;

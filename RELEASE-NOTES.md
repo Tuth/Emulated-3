@@ -1,9 +1,9 @@
-# Windows x64 0.2.3-preview
+# Windows x64 0.2.4-preview
 
-Fix a reproducible long-run scheduler rounding defect that can cause an idle watchdog stop: integer host/PIT cycle deadlines no longer round-trip their budgets through absolute seconds. The watchdog remains enabled.
+Bring the Windows standalone GUI up to date with Settings, boot-ROM selection, D1 OS image selection, D3 CD insert/eject, zoom and analog model controls. Add live WinMM audio and MIDI input device menus. Double-click starts the GUI without command-line media.
 
-Future VST3 watchdog stops append clock/PC/deadline diagnostics to `%APPDATA%/eiii/eiii-vst3-watchdog.log`.
+Standalone defaults, display appearance, watchdog diagnostics and persistent HD change sidecars have dedicated filenames independent of VST3. The original OS MIDI Globals were verified to survive a fresh engine via its standalone disk sidecar; the base image remains read-only. VST3 continues to store disk changes per instance/project.
 
-Includes the Windows standalone EXE, VST3 bundle, matching source, pinned MIT VST3 SDK subset and licenses. No E-mu firmware, OS or sample media is bundled.
+The 0.2.3 watchdog fix is retained. Native regression tests and Windows builds pass; Windows GUI/device confirmation is pending. Floppy access remains unimplemented (WD1772 no-disk stub); it requires a separate controller/media implementation and an original EIII floppy image for validation.
 
-The numerical regression reproduces zero budgets in the old algorithm and checks exact progress at long-run timestamps. Native VST3 sampling/MIDI/bank-state and 64-bit regressions pass. Windows host validation of this hotfix remains pending.
+No E-mu ROM, OS or sample media is bundled.

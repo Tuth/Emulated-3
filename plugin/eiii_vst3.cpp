@@ -369,5 +369,5 @@ void RackView::menus(){
 bool InitModule(){return true;}
 bool DeinitModule(){return true;}
 BEGIN_FACTORY("eiii-core (unofficial)","https://github.com/parguinsys/Emulated-3","",PFactoryInfo::kNoFlags)
-DEF_CLASS2(INLINE_UID(0xEF98301A,0xDBF84D09,0xB6BAE344,0x04F37C11),PClassInfo::kManyInstances,kVstAudioEffectClass,"EIII Rack",0,"Instrument|Sampler","0.2.3-preview",kVstVersionString,RackPlugin::create)
+DEF_CLASS2(INLINE_UID(0xEF98301A,0xDBF84D09,0xB6BAE344,0x04F37C11),PClassInfo::kManyInstances,kVstAudioEffectClass,"EIII Rack",0,"Instrument|Sampler","0.2.4-preview",kVstVersionString,RackPlugin::create)
 END_FACTORY

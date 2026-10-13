@@ -50,7 +50,7 @@ CXXFLAGS += -D_WIN32_WINNT=0x0601 -DNOMINMAX
 SRC_HOST := $(filter-out host_io.cpp,$(SRC_HOST)) host_io_win.cpp
 SRC_UI := $(filter-out ../ui/x11_window.cpp,$(SRC_UI)) ../ui/win32_window.cpp
 LDLIBS = -lwinmm -lpthread
-LDLIBS_X = -lgdi32 -luser32
+LDLIBS_X = -lgdi32 -luser32 -lcomdlg32
 LDFLAGS += -static
 endif
 AR ?= ar

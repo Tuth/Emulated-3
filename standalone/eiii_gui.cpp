@@ -1,5 +1,9 @@
 // eiii-standalone --gui — see eiii_gui.h.
 #include "eiii_gui.h"
+#include "gui_config.h"
+#include "gui_menu.h"
+#include <mutex>
+#include <memory>
 #include "host_io.h"
 #include "ui_macro.h"
 #include "panel/eiii_panel_adapter.h"
@@ -26,23 +30,11 @@ namespace {
 std::atomic<bool> s_quit{false};
 void on_signal(int) { s_quit = true; }
 
-// GUI state of the standalone (display theme + per-theme Contrast level): $XDG_CONFIG_HOME/eiii/gui.state, else
-// ~/.config/eiii/gui.state.  Host UI only; read at start, written when it changes and at exit.
+// GUI state of the standalone (display theme + per-theme Contrast level): $XDG_CONFIG_HOME/eiii/eiii-standalone-gui.state, else
+// ~/.config/eiii/eiii-standalone-gui.state.  Host UI only; read at start, written when it changes and at exit.
 std::string gui_state_path(bool create_dir)
 {
-	std::string dir;
-#ifdef _WIN32
-	if (char const *x = getenv("APPDATA"); x && *x) dir = x;
-	else return {};
-#else
-	if (char const *x = getenv("XDG_CONFIG_HOME"); x && *x) dir = x;
-	else if (char const *h = getenv("HOME"); h && *h) dir = std::string(h) + "/.config";
-	else return {};
-#endif
-	if (create_dir) eiii::create_native_directory(dir);
-	dir += "/eiii";
-	if (create_dir) eiii::create_native_directory(dir);
-	return dir + "/gui.state";
+	return standalone_storage_path("eiii-standalone-gui.state", create_dir);
 }
 void load_gui_state(eiii::panel_adapter &ui)
 {
@@ -67,6 +59,7 @@ void save_gui_state(std::string const &state)
 int run_gui(gui_options const &o)
 {
 	s_quit = false;
+	gui_options cfg = o;
 	eiii::engine_config ec;
 	ec.rt.rom_only = o.rom_only;
 	ec.rt.rom_dir = o.rom_dir; ec.rt.hd_path = o.hd; ec.rt.cd_path = o.cd;
@@ -74,41 +67,74 @@ int run_gui(gui_options const &o)
 	ec.rt.sample_rate = 48000.0;
 	ec.max_block = o.period;
 	ec.realtime = true;
+	if(!ec.rt.hd_path.empty())ec.rt.hd_changes[1]=standalone_read(standalone_hd_state(1));
+	ec.rt.on_error=[](std::string const &message){auto p=standalone_storage_path("eiii-standalone-watchdog.log",true);std::ofstream out(p,std::ios::app);out<<message<<"\n";};
 	eiii::engine eng;
 	eng.start(ec);
 	eiii::panel_adapter ui(eng);
 	load_gui_state(ui);
 	std::string saved_state = ui.display_state();
 
-	// audio + MIDI thread: pulls the engine at the device's pace (or the wall clock without a device)
+	struct io_state {std::mutex mutex;std::string audio,midi,error;unsigned requested=1,applied=0;};
+	io_state io;io.audio=o.audio_out;io.midi=o.midi_in;
+	auto request_io=[&](bool audio,std::string name){std::lock_guard<std::mutex> g(io.mutex);(audio?io.audio:io.midi)=std::move(name);++io.requested;};
+	// Only this thread owns WinMM/ALSA handles. Failed device changes keep the previous device.
 	std::thread audio([&] {
-		midi_input mi;
-		if (!o.midi_in.empty() && !mi.open(o.midi_in)) fprintf(stderr, "GUI: cannot open MIDI input %s\n", o.midi_in.c_str());
-		audio_output ao;
-		if (!o.audio_out.empty() && !ao.open(o.audio_out, 48000, o.period, o.periods)) fprintf(stderr, "GUI: cannot open audio output %s\n", o.audio_out.c_str());
-		if (ao.is_open()) fprintf(stderr, "audio: %s 48000 Hz, period %u, buffer %u frames; engine latency %u frames\n", o.audio_out.c_str(), ao.period(), ao.buffer(), eng.latency());
-		unsigned const n = ao.is_open() ? ao.period() : o.period;
-		std::vector<float> l(n), r(n), lr(2 * n);
-		std::vector<uint8_t> bytes;
-		auto next = std::chrono::steady_clock::now();
-		while (!s_quit)
-		{
-			if (mi.is_open() && mi.read(bytes)) { for (uint8_t b : bytes) eng.midi(0, &b, 1); bytes.clear(); }
-			eng.pull(l.data(), r.data(), n);
-			if (ao.is_open())
-			{
-				for (unsigned i = 0; i < n; ++i) { lr[2 * i] = l[i]; lr[2 * i + 1] = r[i]; }
-				ao.write(lr.data(), n);
+		std::unique_ptr<midi_input> mi;std::unique_ptr<audio_output> ao;
+		std::string current_audio,current_midi;unsigned revision=0;
+		unsigned const n=o.period;
+		std::vector<float> l(n),r(n),lr(2*n);std::vector<uint8_t> bytes;
+		auto next=std::chrono::steady_clock::now();
+		while(!s_quit) {
+			std::string wanted_audio,wanted_midi;unsigned wanted_revision;
+			{std::lock_guard<std::mutex> g(io.mutex);wanted_revision=io.requested;wanted_audio=io.audio;wanted_midi=io.midi;}
+			if(wanted_revision!=revision) {
+				std::string error;
+				if(wanted_audio!=current_audio) {
+					if(wanted_audio.empty()){ao.reset();current_audio.clear();}
+					else {auto candidate=std::make_unique<audio_output>();if(candidate->open(wanted_audio,48000,o.period,o.periods)){ao=std::move(candidate);current_audio=wanted_audio;}else error="Cannot open audio output; previous device retained";}
+				}
+				if(wanted_midi!=current_midi) {
+					if(wanted_midi.empty()){mi.reset();current_midi.clear();}
+					else {auto candidate=std::make_unique<midi_input>();if(candidate->open(wanted_midi)){mi=std::move(candidate);current_midi=wanted_midi;}else error="Cannot open MIDI input; previous device retained";}
+				}
+				revision=wanted_revision;
+				{std::lock_guard<std::mutex> g(io.mutex);if(io.requested==revision){io.audio=current_audio;io.midi=current_midi;io.error=error;io.applied=revision;}}
+				next=std::chrono::steady_clock::now();
 			}
-			else { next += std::chrono::nanoseconds(int64_t(n * 1e9 / 48000.0)); std::this_thread::sleep_until(next); }
+			if(mi && mi->read(bytes)){for(uint8_t b:bytes)eng.midi(0,&b,1);bytes.clear();}
+			eng.pull(l.data(),r.data(),n);
+			if(ao){for(unsigned i=0;i<n;++i){lr[2*i]=l[i];lr[2*i+1]=r[i];}ao->write(lr.data(),n);}
+			else {next+=std::chrono::nanoseconds(int64_t(n*1e9/48000.0));std::this_thread::sleep_until(next);}
 		}
-		if (ao.is_open()) fprintf(stderr, "audio: XRUNs %u\n", ao.xruns());
 	});
 
 	eiii::ui::panel_window win(ui);
-	int w, h; eiii::ui::panel_view::preferred_size(o.scale, w, h);
+	auto save=[&]{cfg.view_width=win.width();if(!save_gui_defaults(cfg))win.view().set_menu_status("Cannot save standalone settings");};
+	standalone_menus(win,eng,cfg,request_io,save);
+	unsigned applied_io=0;
+	win.on_tick=[&]{
+		eiii::media_result result;
+		while(eng.poll_media_result(result)) {
+			if(!result.ok){win.view().set_menu_status(result.error);continue;}
+			if(result.slot==eiii::media_slot::rom)cfg.rom_dir=result.path;
+			else if(result.slot==eiii::media_slot::cem_model)cfg.cem_model=result.path;
+			else if(result.slot==eiii::media_slot::scsi && result.scsi_id==1){cfg.hd=result.path;cfg.rom_only=false;}
+			else if(result.slot==eiii::media_slot::scsi && result.scsi_id==3)cfg.cd=result.path;
+			win.view().set_menu_status(result.restarted?"Restarted":"");save();
+		}
+		std::string error;bool changed=false;
+		{std::lock_guard<std::mutex> g(io.mutex);if(io.applied!=applied_io){applied_io=io.applied;cfg.audio_out=io.audio;cfg.midi_in=io.midi;error=io.error;changed=true;}}
+		if(changed){win.view().set_menu_status(error);save();}
+		auto warning=eng.take_warning();if(!warning.empty())win.view().set_menu_status(warning);
+	};
+	win.on_resize_finish=save;
+	int w,h;eiii::ui::panel_view::preferred_size(o.scale,w,h,true);
+	if(o.view_width){w=o.view_width;h=int(std::lround(w*564.0/1472));}
 	std::string err;
-	if (!win.open(0, w, h, err)) { fprintf(stderr, "GUI: %s\n", err.c_str()); s_quit = true; audio.join(); return 3; }
+	if(!win.open(0,w,h,err)){fprintf(stderr,"GUI: %s\n",err.c_str());s_quit=true;audio.join();return 3;}
+	uint64_t saved_hd_serial=~uint64_t(0);
+	auto save_disks=[&]{auto serial=eng.hd_changes_serial();if(serial==saved_hd_serial)return;for(unsigned id=1;id<8;++id){auto state=eng.hd_changes(id);if(!standalone_write(standalone_hd_state(id),state))win.view().set_menu_status("Cannot save standalone disk changes");}saved_hd_serial=serial;};
 	std::signal(SIGINT, on_signal); std::signal(SIGTERM, on_signal);
 
 	// optional operator macro (--autoload-bank / --preset): presses panel switches through the adapter and waits for
@@ -161,6 +187,7 @@ int run_gui(gui_options const &o)
 		if (now - last_state_check >= std::chrono::seconds(1))
 		{
 			last_state_check = now;
+			save_disks();
 			if (std::string const st = ui.display_state(); st != saved_state) { save_gui_state(st); saved_state = st; }
 		}
 		double const t = ui.snapshot().emu_seconds;
@@ -179,7 +206,9 @@ int run_gui(gui_options const &o)
 	audio.join();
 	auto const st = eng.stats();
 	fprintf(stderr, "GUI: %.1f s emulated, underruns %llu, inputs dropped %llu\n", st.emu_seconds, (unsigned long long)st.underruns, (unsigned long long)st.panel_dropped);
+	save();
 	win.close();
 	eng.shutdown();
+	saved_hd_serial=~uint64_t(0);save_disks();
 	return 0;
 }

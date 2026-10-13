@@ -59,7 +59,7 @@ start it as `pw-jack qtractor` so it doesn't take the sound card away from the d
 
 ## Windows fork
 
-Fork of [parguinsys/Emulated-3](https://github.com/parguinsys/Emulated-3). Windows port version **0.2.3-preview**. Firmware/OS boot, CD bank loading, MIDI notes and sound were confirmed by the tester in Windows hosts. Cubase editor resizing works; VSTHost may forget editor size when it closes. Windows sampling input and bulk SysEx remain unverified.
+Fork of [parguinsys/Emulated-3](https://github.com/parguinsys/Emulated-3). Windows port version **0.2.4-preview**. Firmware/OS boot, CD bank loading, MIDI notes and sound were confirmed by the tester in Windows hosts. Cubase editor resizing works; VSTHost may forget editor size when it closes. Windows sampling input and bulk SysEx remain unverified.
 
 Build with MSYS2 UCRT64:
 
