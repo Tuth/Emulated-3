@@ -98,3 +98,11 @@ less when other events are present). A message that does not fit is skipped whol
 This is not a validated bulk sample-dump implementation. There is no MIDI/SysEx output port, so protocols
 requiring outgoing acknowledgements or hardware-to-host dumps are not supported by this preview.
 Host MIDI routing and the original OS/bank settings determine which controllers take effect.
+
+## 0.2.3 long-run watchdog hotfix
+
+Host and PIT deadlines expressed in integer CPU cycles now retain their integer budgets. Previously, subtracting large absolute floating-point timestamps could round a one-cycle interval below one cycle, then floor it to zero and spin until the watchdog stopped the machine. Fractional device timer scheduling and the watchdog remain enabled.
+
+If a future watchdog stop occurs, the VST3 appends the emulated time, cycle, PC and deadline details to `%APPDATA%/eiii/eiii-vst3-watchdog.log`. This contains diagnostic counters, not ROM or sample contents.
+
+Regression: `g++ -std=c++20 -O2 -I. tests/cycle_deadline.cpp -o /tmp/eiii-cycle-deadline && /tmp/eiii-cycle-deadline`. Optional VST3 soak: set `EIII_SOAK_SECONDS=4200` when running the native `vst3_host_smoke` test with your ROMs and OS disk. Windows host confirmation is still required for the new build.

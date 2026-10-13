@@ -1,15 +1,9 @@
-# Windows x64 0.2.2-preview
+# Windows x64 0.2.3-preview
 
-Working Windows port of parguinsys/Emulated-3, retaining the original firmware/OS execution and emulation core.
+Fix a reproducible long-run scheduler rounding defect that can cause an idle watchdog stop: integer host/PIT cycle deadlines no longer round-trip their budgets through absolute seconds. The watchdog remains enabled.
 
-- Windows standalone with WinMM audio/MIDI and resizable rack panel.
-- VST3 instrument with stereo output, Sample In, 16 MIDI channels and project disk change state.
-- CD Insert native accented-path crash fix.
-- Remembered ROM directory; editor grip and zoom controls.
-- All source build dependencies included, including pinned MIT VST3 SDK subset.
+Future VST3 watchdog stops append clock/PC/deadline diagnostics to `%APPDATA%/eiii/eiii-vst3-watchdog.log`.
 
-Windows tester confirmed firmware and OS boot, CD bank load, MIDI notes and audible output; Cubase resizing works. Native processor tests cover sampling, MIDI, save-bank/state restore and 64-bit audio. Windows sampling and bulk SysEx have not been validated. VSTHost may forget editor size. No MIDI OUT. Arbitrary Unicode paths remain limited by the native Windows code page.
+Includes the Windows standalone EXE, VST3 bundle, matching source, pinned MIT VST3 SDK subset and licenses. No E-mu firmware, OS or sample media is bundled.
 
-No E-mu firmware, OS or sample media is included. Supply your own ROMs and OS 2.42 disk image. If a loaded bank is silent outside Supermode, check Master / 8 Special / 7 MIDI Globals and match the host channel or choose Omni.
-
-Release asset: Emulated-3-WIN64-VST3-0.2.2.zip, containing standalone EXE, full VST3 bundle, corresponding source, SDK dependencies, licenses and setup instructions.
+The numerical regression reproduces zero budgets in the old algorithm and checks exact progress at long-run timestamps. Native VST3 sampling/MIDI/bank-state and 64-bit regressions pass. Windows host validation of this hotfix remains pending.

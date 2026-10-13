@@ -63,6 +63,12 @@ bool remember_preference(std::string const &key,std::string const &value) {
 }
 eiii::runtime_config defaults() {
     eiii::runtime_config c;
+    c.on_error=[](std::string const &message){
+        auto dir=eiii::path_parent(config_file());
+        if(dir.empty() || !eiii::create_native_directory(dir))return;
+        std::ofstream out(dir+"/eiii-vst3-watchdog.log",std::ios::app);
+        out<<message<<"\n";
+    };
     std::ifstream in(config_file());
     for(std::string line;std::getline(in,line);) {
         auto pos=line.find('=');if(pos==std::string::npos)continue;
@@ -363,5 +369,5 @@ void RackView::menus(){
 bool InitModule(){return true;}
 bool DeinitModule(){return true;}
 BEGIN_FACTORY("eiii-core (unofficial)","https://github.com/parguinsys/Emulated-3","",PFactoryInfo::kNoFlags)
-DEF_CLASS2(INLINE_UID(0xEF98301A,0xDBF84D09,0xB6BAE344,0x04F37C11),PClassInfo::kManyInstances,kVstAudioEffectClass,"EIII Rack",0,"Instrument|Sampler","0.2.2-preview",kVstVersionString,RackPlugin::create)
+DEF_CLASS2(INLINE_UID(0xEF98301A,0xDBF84D09,0xB6BAE344,0x04F37C11),PClassInfo::kManyInstances,kVstAudioEffectClass,"EIII Rack",0,"Instrument|Sampler","0.2.3-preview",kVstVersionString,RackPlugin::create)
 END_FACTORY

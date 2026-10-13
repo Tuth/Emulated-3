@@ -1,6 +1,7 @@
 // eiii::runtime — see eiii_runtime.h.  Device construction, timer order and the slice loop are the ones the
 // standalone has been proven with (instruction-identical to MAME); only process globals became instance state.
 #include "eiii_runtime_impl.h"
+#include "eiii_cycle_deadline.h"
 #include <algorithm>
 #include "../standalone/file_offset.h"
 #include <dirent.h>
@@ -334,11 +335,21 @@ void runtime::run_until_cycle(uint64_t c_target)
 	while (u64(cpu.total_cycles()) < c_target && !s.stop)
 	{
 		// next event: earliest MAME-style timer, the PIT's next output change, or the caller's boundary
-		attotime target = std::min(s.sched.next_expiry(), chunk_end);
+		attotime const timer_end = s.sched.next_expiry();
+		attotime target = std::min(timer_end, chunk_end);
+		// Keep integer-cycle boundaries exact. Subtracting absolute floating-point
+		// times can turn a one-cycle interval into slightly less than one cycle
+		// after a long run; flooring that value would retry this boundary forever.
+		bool cycle_boundary = chunk_end <= timer_end;
+		uint64_t target_cycle = c_target;
 		for (int i = 0; i < 3; ++i)
 		{
 			double const e = s.m.pit_next_event(i);
-			if (e < 1e29) target = std::min(target, attotime(attotime::T(e) / attotime::T(CPU_HZ)));
+			if (e < 1e29)
+			{
+				attotime const pit_end(attotime::T(e) / attotime::T(CPU_HZ));
+				if (pit_end < target) { target = pit_end; target_cycle = uint64_t(e); cycle_boundary = true; }
+			}
 		}
 		attotime const now = cpu.local_time();
 		attotime upto = target;
@@ -346,7 +357,8 @@ void runtime::run_until_cycle(uint64_t c_target)
 		{
 			// MAME: run the CPU for floor(delta / cycle) cycles; it stops at the first instruction boundary past that
 			long double const dc = (target - now).m_seconds * attotime::T(CPU_HZ);
-			int const budget = int(std::min<long double>(std::floor(dc + 1e-9L), 1e9L));
+			int const budget = cycle_boundary ? cycle_deadline_budget(target_cycle, cpu.total_cycles())
+				: int(std::min<long double>(std::floor(dc + 1e-9L), 1e9L));
 			if (budget >= 1)
 			{
 				cpu.run(budget);
@@ -358,6 +370,11 @@ void runtime::run_until_cycle(uint64_t c_target)
 		for (int i = 0; i < 3; ++i) s.m.pit_update(i, double(cpu.total_cycles()));
 		// watchdog: emulated time must advance; a scheduler/PIT event stuck in the past would spin forever
 		if (cpu.local_time() == s.wd_last) { if (++s.wd_spins == 1000000) {
+			char diagnostic[1024];
+			snprintf(diagnostic, sizeof diagnostic, "WATCHDOG: time=%.9f cycle=%llu pc=%06X next_timer=%.12f target=%.12f boundary=%s target_cycle=%llu",
+				double(cpu.local_time().m_seconds), (unsigned long long)cpu.total_cycles(), unsigned(cpu.state_pc()),
+				double(s.sched.next_expiry().m_seconds), double(target.m_seconds), cycle_boundary ? "cycle" : "timer", (unsigned long long)target_cycle);
+			if (s.cfg.on_error) s.cfg.on_error(diagnostic);
 			fprintf(stderr, "WATCHDOG: emulated time stuck at %.9f s (cycle %llu); next timer %.9f; target was %.9f\n", double(cpu.local_time().m_seconds),
 				(unsigned long long)cpu.total_cycles(), double(s.sched.next_expiry().m_seconds), double(target.m_seconds));
 			for (int i = 0; i < 3; ++i) { auto const &c = s.m.pit[i]; fprintf(stderr, "  PIT%d mode %u loaded %d gate %d out %d count %u reload %u bcd %d load_delay %u rem %llu last_t %.3f next %.3f\n",

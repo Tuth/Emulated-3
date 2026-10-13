@@ -102,6 +102,15 @@ int main(){
     ProcessData d64{};d64.processMode=kOffline;d64.symbolicSampleSize=kSample64;d64.numSamples=512;d64.numOutputs=1;d64.outputs=&out64;
     bool finite=true;for(int b=0;b<20;++b){finite=finite && processor->process(d64)==kResultOk;for(double v:dl)finite=finite && std::isfinite(v);}
     CHECK(finite,"64-bit audio process after deactivate/reactivate");
+    if(auto seconds=env("EIII_SOAK_SECONDS");!seconds.empty()) {
+        double duration=std::strtod(seconds.c_str(),nullptr);
+        size_t blocks=size_t(std::ceil(std::clamp(duration,0.0,86400.0)*44100.0/512.0));
+        for(size_t b=0;b<blocks;++b) {
+            if(processor->process(d64)!=kResultOk){++failures;break;}
+            if(b%10000==0){printf("SOAK %.1f / %.1f seconds; emulated %.1f\n",double(b)*512/44100,duration,p->engine.stats().emu_seconds);fflush(stdout);}
+        }
+        CHECK(p->engine.stats().emu_seconds >= duration,"idle VST3 processor advances past long-run clock boundaries");
+    }
     processor->setProcessing(false);component->setActive(false);
     component->terminate();mapping->release();controller->release();processor->release();component->release();factory->release();
     printf("%s: %d failures\n",failures?"FAIL":"OK",failures);return failures?1:0;

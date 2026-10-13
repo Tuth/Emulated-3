@@ -36,6 +36,7 @@ struct runtime_config
 	// diagnostics (stderr)
 	bool log_voice_starts = false, log_leds = false, log_midi_chain = false;
 	FILE *log = nullptr;            // bus/device event log (debug aid)
+	std::function<void(std::string const &)> on_error; // rare fatal diagnostics, on the engine thread
 };
 
 // LCD controller state as the display shows it (HD44780: DDRAM, CGRAM, address counter, display control).
