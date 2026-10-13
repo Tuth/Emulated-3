@@ -106,3 +106,9 @@ Host and PIT deadlines expressed in integer CPU cycles now retain their integer 
 If a future watchdog stop occurs, the VST3 appends the emulated time, cycle, PC and deadline details to `%APPDATA%/eiii/eiii-vst3-watchdog.log`. This contains diagnostic counters, not ROM or sample contents.
 
 Regression: `g++ -std=c++20 -O2 -I. tests/cycle_deadline.cpp -o /tmp/eiii-cycle-deadline && /tmp/eiii-cycle-deadline`. Optional VST3 soak: set `EIII_SOAK_SECONDS=4200` when running the native `vst3_host_smoke` test with your ROMs and OS disk. Windows host confirmation is still required for the new build.
+
+## 0.2.5 D0 floppy
+
+D0 Floppy accepts write-protected EIII 800 KiB IMG and HFE v1 images. Clicking the front-panel drive opens D0; its eject button now ejects the floppy. D3 still provides CD insert/eject. Settings > Restart cold boots after choosing an OS floppy. D1 HD > Disconnect HD cold boots without the HD for a floppy-only OS test.
+
+Floppy media changes do not cold-reset the machine. Failed insertion retains the current floppy. The floppy path is per instance and saved in VST3 project state v2; old v1 project states remain readable with an empty D0. Save paths as defaults also stores D0 in the VST3 configuration, independently of the EXE configuration. Floppy writes/formatting and E3O updater packages are not supported; hard-disk change sidecars/project state retain their existing behavior.

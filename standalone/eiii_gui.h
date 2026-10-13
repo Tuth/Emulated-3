@@ -5,7 +5,7 @@
 
 struct gui_options
 {
-	std::string rom_dir, hd, cd, cem_model = "v1", cem_calib, midi_in, audio_out;
+	std::string rom_dir, hd, cd, floppy, cem_model = "v1", cem_calib, midi_in, audio_out;
 	unsigned period = 256, periods = 4;
 	int autoload_bank = -1, drive = 3, preset = -1;
 	double scale = 100.0;           // percent of 1472 x 538

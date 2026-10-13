@@ -26,6 +26,7 @@ struct runtime_config
 	bool rom_only = false;         // explicit boot-ROM diagnostic without an OS disk
 	std::string rom_dir;            // e3-lsboot_ip381a_emu_systems_4088.ic3 / e3-msboot_ip380a_emu_systems_4088.ic4
 	std::string hd_path;            // OS 2.42 hard disk image (SCSI ID 1), opened read-only
+	std::string floppy_path;        // D0: read-only EIII 800 KiB IMG / HFE v1
 	std::string cd_path;            // optional CD-ROM image (SCSI ID 3)
 	scsi_target scsi[8];            // extra drives at IDs 4..7 (scsi_extra_id); IDs 1 and 3 are hd_path / cd_path
 	std::string hd_changes[8];      // hard disk change sets to apply at open (SCSI 1, extra HDs), see hd_changes()
@@ -105,6 +106,11 @@ public:
 	// ---- diagnostics (tests): read emulated memory as the CPU sees it, no side effects on RAM / sample RAM ----
 	uint16_t debug_read16(uint32_t address) const;
 	uint32_t debug_read32(uint32_t address) const;   // little-endian, as the NS32016
+
+	// ---- removable floppy (D0), read-only ----
+	bool mount_floppy(std::string const &path, std::string &error);
+	void eject_floppy();
+	static bool check_floppy_image(std::string const &path, std::string &error);
 
 	// ---- media (SCSI ID 3 CD-ROM drive) ----
 	// A disc change as on the real drive: the next command after a mount reports UNIT ATTENTION (new medium), an empty

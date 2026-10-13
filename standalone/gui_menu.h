@@ -28,9 +28,9 @@ inline void standalone_menus(eiii::ui::panel_window &win,eiii::engine &eng,gui_o
 	using namespace eiii::ui;using eiii::media_slot;
 	auto change=[&win,&eng](media_slot slot,std::string const &path){if(!eng.set_media(slot,path))win.view().set_menu_status("Request queue is full; retry");};
 	auto choose=[&win,&cfg,change](media_slot slot){
-		bool rom=slot==media_slot::rom;bool cd=slot==media_slot::cd;
-		auto path=standalone_pick(win,rom?"Boot ROM (*.bin)\0*.bin;*.BIN\0All files\0*.*\0\0":cd?"CD images\0*.iso;*.ISO\0All files\0*.*\0\0":"OS hard disk images\0*.img;*.hd;*.iso;*.hda\0All files\0*.*\0\0",
-			rom?"Choose one boot ROM file":cd?"Insert EIII CD image":"Choose OS hard disk image",rom?"":cd?cfg.cd:cfg.hd);
+		bool rom=slot==media_slot::rom;bool cd=slot==media_slot::cd;bool floppy=slot==media_slot::floppy;
+		auto path=standalone_pick(win,floppy?"EIII floppy images\0*.img;*.IMG;*.hfe;*.HFE\0All files\0*.*\0\0":rom?"Boot ROM (*.bin)\0*.bin;*.BIN\0All files\0*.*\0\0":cd?"CD images\0*.iso;*.ISO\0All files\0*.*\0\0":"OS hard disk images\0*.img;*.hd;*.iso;*.hda\0All files\0*.*\0\0",
+			floppy?"Insert EIII floppy image (write-protected)":rom?"Choose one boot ROM file":cd?"Insert EIII CD image":"Choose OS hard disk image",floppy?cfg.floppy:rom?"":cd?cfg.cd:cfg.hd);
 		if(!path.empty())change(slot,rom?eiii::path_parent(path):path);
 	};
 	std::vector<menu> menus;
@@ -58,8 +58,9 @@ inline void standalone_menus(eiii::ui::panel_window &win,eiii::engine &eng,gui_o
 		v.push_back({"ALSA virtual",cfg.midi_in=="virtual",true,false,false,[request_io]{request_io(false,"virtual");}});
 #endif
 		return v;}});
-	menus.push_back({"d1",[&cfg]{return std::string("D1 HD ")+(cfg.hd.empty()?"(choose OS image)":eiii::native_display(eiii::path_leaf(cfg.hd)));},[&cfg,choose]{return std::vector<menu_item>{menu_item::info(eiii::native_display(cfg.hd)),{"Choose OS hard disk image...",false,true,false,false,[choose]{choose(media_slot::hd);} },menu_item::info("OS writes persist in a standalone sidecar")};}});
+	menus.push_back({"d0",[&cfg]{return std::string("D0 Floppy ")+(cfg.floppy.empty()?"(empty)":eiii::native_display(eiii::path_leaf(cfg.floppy)));},[&cfg,choose,change]{return std::vector<menu_item>{menu_item::info(eiii::native_display(cfg.floppy)),{"Insert floppy image...",false,true,false,false,[choose]{choose(media_slot::floppy);}},{"Eject",false,true,false,false,[change]{change(media_slot::floppy,"");}},menu_item::info("Write protected: EIII IMG / HFE v1")};}});
+	menus.push_back({"d1",[&cfg]{return std::string("D1 HD ")+(cfg.hd.empty()?"(choose OS image)":eiii::native_display(eiii::path_leaf(cfg.hd)));},[&cfg,choose,change]{return std::vector<menu_item>{menu_item::info(eiii::native_display(cfg.hd)),{"Choose OS hard disk image...",false,true,false,false,[choose]{choose(media_slot::hd);} },{"Disconnect HD (cold boot)",false,true,false,false,[change]{change(media_slot::hd,"");}},menu_item::info("OS writes persist in a standalone sidecar")};}});
 	menus.push_back({"d3",[&cfg]{return std::string("D3 CD ")+(cfg.cd.empty()?"(empty)":eiii::native_display(eiii::path_leaf(cfg.cd)));},[&cfg,choose,change]{return std::vector<menu_item>{menu_item::info(eiii::native_display(cfg.cd)),{"Insert CD image...",false,true,false,false,[choose]{choose(media_slot::cd);}},{"Eject",false,true,false,false,[change]{change(media_slot::cd,"");}}};}});
 	win.view().set_menus(std::move(menus));
-	win.view().on_drive_click=[&win,change](bool eject,float x,float y){if(eject)change(media_slot::cd,"");else win.view().open_menu_at(win.view().find_menu("d3"),x,y);};
+	win.view().on_drive_click=[&win,change](bool eject,float x,float y){if(eject)change(media_slot::floppy,"");else win.view().open_menu_at(win.view().find_menu("d0"),x,y);};
 }

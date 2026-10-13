@@ -45,6 +45,7 @@ inline void load_gui_defaults(gui_options &o)
 		if (k == "rom_dir") o.rom_dir = v;
 		else if (k == "hd") o.hd = v;
 		else if (k == "cd") o.cd = v;
+		else if (k == "floppy") o.floppy = v;
 		else if (k == "cem_model" && (v == "v1" || v == "v2")) o.cem_model = v;
 		else if (k == "midi_in") o.midi_in = v;
 		else if (k == "audio_out") o.audio_out = v;
@@ -53,7 +54,7 @@ inline void load_gui_defaults(gui_options &o)
 }
 inline bool save_gui_defaults(gui_options const &o)
 {
-	return standalone_write("eiii-standalone.conf", "rom_dir="+o.rom_dir+"\nhd="+o.hd+"\ncd="+o.cd+"\ncem_model="+o.cem_model+"\nmidi_in="+o.midi_in+"\naudio_out="+o.audio_out+"\nview_width="+std::to_string(o.view_width)+"\n");
+	return standalone_write("eiii-standalone.conf", "rom_dir="+o.rom_dir+"\nhd="+o.hd+"\ncd="+o.cd+"\nfloppy="+o.floppy+"\ncem_model="+o.cem_model+"\nmidi_in="+o.midi_in+"\naudio_out="+o.audio_out+"\nview_width="+std::to_string(o.view_width)+"\n");
 }
 inline std::string standalone_hd_state(unsigned id) { return "eiii-standalone-hd"+std::to_string(id)+".state"; }
 inline std::string standalone_read(std::string const &name)

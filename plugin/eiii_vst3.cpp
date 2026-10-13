@@ -74,7 +74,7 @@ eiii::runtime_config defaults() {
         auto pos=line.find('=');if(pos==std::string::npos)continue;
         auto k=line.substr(0,pos),v=line.substr(pos+1);
         if(!v.empty() && v.back()=='\r')v.pop_back();
-        if(k=="rom_dir")c.rom_dir=v;else if(k=="hd")c.hd_path=v;else if(k=="cd")c.cd_path=v;else if(k=="cem_model")c.cem_model=v;
+        if(k=="rom_dir")c.rom_dir=v;else if(k=="hd")c.hd_path=v;else if(k=="cd")c.cd_path=v;else if(k=="floppy")c.floppy_path=v;else if(k=="cem_model")c.cem_model=v;
     }
     for(auto [key,out]:{std::pair{"EIII_ROM_DIR",&c.rom_dir},{"EIII_HD",&c.hd_path},{"EIII_CD",&c.cd_path}}) {
         auto v=env(key);if(!v.empty())*out=v;
@@ -258,24 +258,27 @@ public:
             }
             if(!done)return kResultFalse;
         }
-        char magic[8]={'E','I','I','I','V','S','T',1};if(!transfer(s,magic,8,true))return kResultFalse;
+        char magic[8]={'E','I','I','I','V','S','T',2};if(!transfer(s,magic,8,true))return kResultFalse;
         for(auto p:{&c.rom_dir,&c.hd_path,&c.cd_path,&c.cem_model,&display})if(!string_state(s,*p,true,1u<<20))return kResultFalse;
         for(unsigned id=1;id<8;++id)if(!string_state(s,c.hd_changes[id],true,256u<<20))return kResultFalse;
+        if(!string_state(s,c.floppy_path,true,1u<<20))return kResultFalse;
         return kResultOk;
     }
     tresult PLUGIN_API setState(IBStream *s) override {
         if(!s)return kInvalidArgument;
         char magic[8];char expected[8]={'E','I','I','I','V','S','T',1};
-        if(!transfer(s,magic,8,false) || std::memcmp(magic,expected,8))return kResultFalse;
+        if(!transfer(s,magic,8,false) || std::memcmp(magic,expected,7) || (magic[7]!=1 && magic[7]!=2))return kResultFalse;
         auto c=config;std::string display;
         for(auto p:{&c.rom_dir,&c.hd_path,&c.cd_path,&c.cem_model,&display})if(!string_state(s,*p,false,1u<<20))return kResultFalse;
         uint64 total=0;for(unsigned id=1;id<8;++id){if(!string_state(s,c.hd_changes[id],false,uint32((256u<<20)-total)))return kResultFalse;total+=c.hd_changes[id].size();if(total>256u<<20)return kResultFalse;}
+        c.floppy_path.clear();
+        if(magic[7]==2 && !string_state(s,c.floppy_path,false,1u<<20))return kResultFalse;
         if(c.cem_model!="v1" && c.cem_model!="v2")return kResultFalse;
         if(c.rom_dir.empty())c.rom_dir=defaults().rom_dir;
         config=std::move(c);config.rom_only=config.hd_path.empty();
         for(size_t pos=0;pos<display.size();){auto end=display.find('\n',pos);panel.apply_display_state_line(display.substr(pos,end-pos).c_str());if(end==std::string::npos)break;pos=end+1;}
         for(size_t pos=display.find("view_width=");pos!=std::string::npos;pos=std::string::npos){int w=editor_width;auto r=std::from_chars(display.data()+pos+11,display.data()+display.size(),w);if(r.ec==std::errc{})editor_width=view_width(w);}
-        if(active){poll_media();engine.set_media(eiii::media_slot::rom,config.rom_dir);engine.set_media(eiii::media_slot::hd,config.hd_path);engine.set_media(eiii::media_slot::cd,config.cd_path);engine.set_media(eiii::media_slot::cem_model,config.cem_model);engine.set_hd_changes(1,config.hd_changes[1]);}
+        if(active){poll_media();engine.set_media(eiii::media_slot::rom,config.rom_dir);engine.set_media(eiii::media_slot::hd,config.hd_path);engine.set_media(eiii::media_slot::cd,config.cd_path);engine.set_media(eiii::media_slot::floppy,config.floppy_path);engine.set_media(eiii::media_slot::cem_model,config.cem_model);engine.set_hd_changes(1,config.hd_changes[1]);}
         return kResultOk;
     }
     IPlugView *PLUGIN_API createView(FIDString name) override {
@@ -288,7 +291,8 @@ public:
         poll_media();
         std::string error;bool ok=true;
         if(slot==eiii::media_slot::rom)ok=eiii::runtime::check_rom_dir(path,error);
-        if(slot==eiii::media_slot::hd)ok=eiii::runtime::check_hd_image(path,error);
+        if(slot==eiii::media_slot::hd && !path.empty())ok=eiii::runtime::check_hd_image(path,error);
+        if(slot==eiii::media_slot::floppy && !path.empty())ok=eiii::runtime::check_floppy_image(path,error);
         if(slot==eiii::media_slot::cd && !path.empty())ok=eiii::runtime::check_cd_image(path,error);
         if(!ok){
 #ifdef _WIN32
@@ -297,8 +301,9 @@ public:
             return;
         }
         if(slot==eiii::media_slot::rom){config.rom_dir=path;remember_preference("rom_dir",path);}
-        else if(slot==eiii::media_slot::hd){config.hd_path=path;config.hd_changes[1].clear();config.rom_only=false;}
+        else if(slot==eiii::media_slot::hd){config.hd_path=path;config.hd_changes[1].clear();config.rom_only=path.empty();}
         else if(slot==eiii::media_slot::cd)config.cd_path=path;
+        else if(slot==eiii::media_slot::floppy)config.floppy_path=path;
         else if(slot==eiii::media_slot::cem_model)config.cem_model=path;
         if(active)engine.set_media(slot,path);
     }
@@ -311,7 +316,7 @@ public:
     void save_defaults() {
         auto file=config_file();if(file.empty())return;
         if(!eiii::create_native_directory(eiii::path_parent(file)))return;
-        std::ofstream out(file);out<<"rom_dir="<<config.rom_dir<<"\nhd="<<config.hd_path<<"\ncd="<<config.cd_path<<"\ncem_model="<<config.cem_model<<"\nview_width="<<editor_width<<"\n";
+        std::ofstream out(file);out<<"rom_dir="<<config.rom_dir<<"\nhd="<<config.hd_path<<"\ncd="<<config.cd_path<<"\nfloppy="<<config.floppy_path<<"\ncem_model="<<config.cem_model<<"\nview_width="<<editor_width<<"\n";
     }
     eiii::runtime_config config;
     eiii::engine engine;
@@ -349,7 +354,7 @@ std::string RackView::pick(char const *filter,char const *title,std::string cons
 void RackView::menus(){
     using namespace eiii::ui;using eiii::media_slot;
     std::vector<menu> m;
-    auto choose=[this](media_slot slot){auto path=pick("All files\0*.*\0\0",slot==media_slot::rom?"Choose either boot ROM file":slot==media_slot::hd?"Choose OS hard disk image":"Choose EIII CD image","");if(!path.empty())plugin.media(slot,slot==media_slot::rom?eiii::path_parent(path):path);};
+    auto choose=[this](media_slot slot){auto path=pick("All files\0*.*\0\0",slot==media_slot::rom?"Choose either boot ROM file":slot==media_slot::hd?"Choose OS hard disk image":slot==media_slot::floppy?"Insert EIII floppy image (write-protected)":"Choose EIII CD image","");if(!path.empty())plugin.media(slot,slot==media_slot::rom?eiii::path_parent(path):path);};
     m.push_back({"settings",[]{return "Settings";},[this,choose]{std::vector<menu_item> v;
         v.push_back({"Boot ROM folder...",false,true,false,false,[choose]{choose(media_slot::rom);}});
         v.push_back({"Save paths as defaults",false,true,false,false,[this]{plugin.save_defaults();}});
@@ -359,9 +364,10 @@ void RackView::menus(){
         v.push_back(menu_item::sep());
         for(auto model:{"v1","v2"})v.push_back({std::string("Analog model ")+model,plugin.config.cem_model==model,true,false,false,[this,model]{plugin.media(media_slot::cem_model,model);}});
         return v;}});
-    m.push_back({"d1",[this]{return std::string("D1 HD ")+(plugin.config.hd_path.empty()?"(choose OS image)":eiii::native_display(eiii::path_leaf(plugin.config.hd_path)));},[this,choose]{return std::vector<menu_item>{menu_item::info(eiii::native_display(plugin.config.hd_path)),{"Choose OS hard disk image...",false,true,false,false,[choose]{choose(media_slot::hd);}}};}});
+    m.push_back({"d0",[this]{return std::string("D0 Floppy ")+(plugin.config.floppy_path.empty()?"(empty)":eiii::native_display(eiii::path_leaf(plugin.config.floppy_path)));},[this,choose]{return std::vector<menu_item>{menu_item::info(eiii::native_display(plugin.config.floppy_path)),{"Insert floppy image...",false,true,false,false,[choose]{choose(media_slot::floppy);}},{"Eject",false,true,false,false,[this]{plugin.media(media_slot::floppy,"");}},menu_item::info("Write protected: EIII IMG / HFE v1")};}});
+    m.push_back({"d1",[this]{return std::string("D1 HD ")+(plugin.config.hd_path.empty()?"(choose OS image)":eiii::native_display(eiii::path_leaf(plugin.config.hd_path)));},[this,choose]{return std::vector<menu_item>{menu_item::info(eiii::native_display(plugin.config.hd_path)),{"Choose OS hard disk image...",false,true,false,false,[choose]{choose(media_slot::hd);}},{"Disconnect HD (cold boot)",false,true,false,false,[this]{plugin.media(media_slot::hd,"");}}};}});
     m.push_back({"d3",[this]{return std::string("D3 CD ")+(plugin.config.cd_path.empty()?"(empty)":eiii::native_display(eiii::path_leaf(plugin.config.cd_path)));},[this,choose]{return std::vector<menu_item>{menu_item::info(eiii::native_display(plugin.config.cd_path)),{"Insert CD image...",false,true,false,false,[choose]{choose(media_slot::cd);}},{"Eject",false,true,false,false,[this]{plugin.media(media_slot::cd,"");}}};}});
-    win.view().set_menus(std::move(m));win.view().on_drive_click=[this](bool eject,float x,float y){if(eject)plugin.media(media_slot::cd,"");else win.view().open_menu_at(win.view().find_menu("d3"),x,y);};
+    win.view().set_menus(std::move(m));win.view().on_drive_click=[this](bool eject,float x,float y){if(eject)plugin.media(media_slot::floppy,"");else win.view().open_menu_at(win.view().find_menu("d0"),x,y);};
 }
 #endif
 }
@@ -369,5 +375,5 @@ void RackView::menus(){
 bool InitModule(){return true;}
 bool DeinitModule(){return true;}
 BEGIN_FACTORY("eiii-core (unofficial)","https://github.com/parguinsys/Emulated-3","",PFactoryInfo::kNoFlags)
-DEF_CLASS2(INLINE_UID(0xEF98301A,0xDBF84D09,0xB6BAE344,0x04F37C11),PClassInfo::kManyInstances,kVstAudioEffectClass,"EIII Rack",0,"Instrument|Sampler","0.2.4-preview",kVstVersionString,RackPlugin::create)
+DEF_CLASS2(INLINE_UID(0xEF98301A,0xDBF84D09,0xB6BAE344,0x04F37C11),PClassInfo::kManyInstances,kVstAudioEffectClass,"EIII Rack",0,"Instrument|Sampler","0.2.5-preview",kVstVersionString,RackPlugin::create)
 END_FACTORY

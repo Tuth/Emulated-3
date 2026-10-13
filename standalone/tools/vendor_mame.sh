@@ -16,7 +16,6 @@ awk '/^project "softfloat3"/{p=1} p && /3rdparty\/softfloat3\/(source|bochs_ext)
 	"$MAME/scripts/src/3rdparty.lua" > "$DST/softfloat3_files.txt"
 REV=$(git -C "$MAME" rev-parse HEAD)
 git -C "$MAME" diff HEAD -- $(cat "$HERE/tools/mame_files.txt") > "$DST/LOCAL_CHANGES.diff" || true
-( cd "$DST" && find . -type f ! -name MANIFEST.sha256 | sort | xargs sha256sum > MANIFEST.sha256 )
 cat > "$DST/PROVENANCE.md" <<EOT
 # Vendored MAME sources
 
@@ -28,4 +27,5 @@ Licences: every MAME file here is \`license:BSD-3-Clause\` (src/lib/util/disasmi
 BSD-3-Clause). Berkeley SoftFloat 3e: see \`3rdparty/softfloat3/COPYING.txt\` (BSD-style, John R. Hauser).
 No E-mu ROM, operating system, sample or bank data is included anywhere in this tree.
 EOT
+( cd "$DST" && find . -type f ! -name MANIFEST.sha256 | sort | xargs sha256sum > MANIFEST.sha256 )
 echo "vendored $(wc -l < "$HERE/tools/mame_files.txt") MAME files + SoftFloat 3e ($(wc -l < "$DST/softfloat3_files.txt") sources) from $REV"

@@ -29,7 +29,7 @@ struct media_request { media_result r; std::function<void(runtime &)> fn; };
 
 char const *media_slot_name(media_slot s)
 {
-	switch (s) { case media_slot::cd: return "cd"; case media_slot::hd: return "hd"; case media_slot::rom: return "rom_dir";
+	switch (s) { case media_slot::floppy: return "floppy"; case media_slot::cd: return "cd"; case media_slot::hd: return "hd"; case media_slot::rom: return "rom_dir";
 	case media_slot::scsi: return "scsi"; case media_slot::cem_model: return "cem_model"; case media_slot::restart: return "restart"; case media_slot::inspect: return "inspect"; case media_slot::hd_changes: return "hd_changes"; }
 	return "?";
 }
@@ -82,6 +82,7 @@ bool engine::poll_media_result(media_result &out)
 	if (out.ok)
 		switch (out.slot)
 		{
+		case media_slot::floppy: m_view.floppy_path = out.path; break;
 		case media_slot::rom: m_view.rom_dir = out.path; break;
 		case media_slot::cem_model: m_view.cem_model = out.path; break;
 		case media_slot::scsi:
@@ -221,6 +222,7 @@ std::string engine::media_path(media_slot slot) const
 {
 	switch (slot)
 	{
+	case media_slot::floppy: return m_view.floppy_path;
 	case media_slot::cd: return m_view.cd_path;
 	case media_slot::hd: return m_view.hd_path;
 	case media_slot::rom: return m_view.rom_dir;
@@ -247,6 +249,11 @@ void engine::apply_media(media_request &rq, bool live)
 	if (rt && r.slot != media_slot::inspect) keep_hd_changes();   // a restart below must not lose what the OS wrote
 	switch (r.slot)
 	{
+	case media_slot::floppy:
+		if (r.path.empty()) { if (rt) rt->eject_floppy(); c.floppy_path.clear(); ok = true; }
+		else if (rt) { if ((ok = rt->mount_floppy(r.path,err))) c.floppy_path = r.path; }
+		else if ((ok = runtime::check_floppy_image(r.path,err))) c.floppy_path = r.path;
+		break;
 	case media_slot::hd_changes:
 		ok = r.scsi_id == 1 || (r.scsi_id < 8 && scsi_extra_id(r.scsi_id) && c.scsi[r.scsi_id].kind == scsi_kind::hd);
 		if (!ok) err = "no hard disk at SCSI " + std::to_string(r.scsi_id);
@@ -274,7 +281,8 @@ void engine::apply_media(media_request &rq, bool live)
 		unsigned const id = r.scsi_id;
 		if (id == 1)
 		{
-			if (r.kind != scsi_kind::hd || r.path.empty()) err = "SCSI 1 is the OS hard disk: choose a hard disk image";
+			if (r.kind != scsi_kind::hd) err = "SCSI 1 is the OS hard disk";
+			else if (r.path.empty()) { c.hd_path.clear(); c.hd_changes[1].clear(); c.rom_only = true; restart = true; ok = true; }
 			else if ((ok = runtime::check_hd_image(r.path, err))) { if (r.path != c.hd_path) c.hd_changes[1].clear(); c.hd_path = r.path; restart = true; }
 		}
 		else if (id == 3)

@@ -32,3 +32,7 @@ src/lib/util/strformat.cpp
 src/lib/util/strformat.h
 src/lib/util/vecstream.h
 src/osd/osdcomm.h
+src/devices/machine/wd_fdc.cpp
+src/devices/machine/wd_fdc.h
+src/devices/machine/fdc_pll.cpp
+src/devices/machine/fdc_pll.h

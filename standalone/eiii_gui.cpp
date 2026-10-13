@@ -62,7 +62,7 @@ int run_gui(gui_options const &o)
 	gui_options cfg = o;
 	eiii::engine_config ec;
 	ec.rt.rom_only = o.rom_only;
-	ec.rt.rom_dir = o.rom_dir; ec.rt.hd_path = o.hd; ec.rt.cd_path = o.cd;
+	ec.rt.rom_dir = o.rom_dir; ec.rt.hd_path = o.hd; ec.rt.cd_path = o.cd; ec.rt.floppy_path = o.floppy;
 	ec.rt.cem_model = o.cem_model; ec.rt.cem_calib = o.cem_calib;
 	ec.rt.sample_rate = 48000.0;
 	ec.max_block = o.period;
@@ -118,8 +118,9 @@ int run_gui(gui_options const &o)
 		while(eng.poll_media_result(result)) {
 			if(!result.ok){win.view().set_menu_status(result.error);continue;}
 			if(result.slot==eiii::media_slot::rom)cfg.rom_dir=result.path;
+			else if(result.slot==eiii::media_slot::floppy)cfg.floppy=result.path;
 			else if(result.slot==eiii::media_slot::cem_model)cfg.cem_model=result.path;
-			else if(result.slot==eiii::media_slot::scsi && result.scsi_id==1){cfg.hd=result.path;cfg.rom_only=false;}
+			else if(result.slot==eiii::media_slot::scsi && result.scsi_id==1){cfg.hd=result.path;cfg.rom_only=cfg.hd.empty();}
 			else if(result.slot==eiii::media_slot::scsi && result.scsi_id==3)cfg.cd=result.path;
 			win.view().set_menu_status(result.restarted?"Restarted":"");save();
 		}

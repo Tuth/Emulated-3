@@ -9,7 +9,7 @@ the voice outputs are rendered through a model of the EIII's F-Chip and CEM3387 
 ![The EIII rack front panel in the plugin, with the drive menu bar](docs/screenshots/rack-panel.png)
 
 > **No E-mu material is included.** This repository has no boot ROMs, no operating system, and no sample or bank data.
-> To use it you need your own EIII boot ROM dumps, an OS 2.42 hard disk image and, optionally, EIII CD-ROM images.
+> To use it you need your own EIII boot ROM dumps, an OS 2.42 disk image (hard disk or Windows D0 floppy) and, optionally, EIII CD-ROM images.
 >
 > **[Download the plugin from Releases](https://github.com/Tuth/Emulated-3/releases), then follow
 > [INSTALL.md](INSTALL.md)**: where the ROMs, the OS disk and CDs go, first start, and troubleshooting.
@@ -24,7 +24,7 @@ the voice outputs are rendered through a model of the EIII's F-Chip and CEM3387 
   - **D1** OS hard disk, **D3** CD-ROM, plus extra CD-ROM drives or hard disks at **D4–D7**.
   - Insert, change or eject a CD while the unit runs: a hot swap the OS sees as a real disc change.
   - A one-click list of the other `.iso` files next to the discs in use.
-  - Clicking the floppy drive opens the D3 menu; its eject button ejects the CD.
+  - Windows: **D0 Floppy** loads read-only EIII 800 KiB IMG or HFE v1 images. The front-panel floppy/eject controls operate D0. The Linux CLAP panel retains its previous D3 shortcut. See [floppy support](docs/FLOPPY.md).
 - **Sampling.** The plugin's stereo **Sample In** port is the EIII's line input. In the SAMPLE module, 7 (Arm Sampling)
   waits for the threshold, Enter stops, and 6 (Place Sample) maps the take onto keys. All of this runs the original
   sampling code at 44 053 / 33 333 Hz. The panel's Sample Input slider sets the level.

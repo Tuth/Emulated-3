@@ -11,6 +11,7 @@
 #include "disasmintf.h"
 
 #include <array>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -106,6 +107,7 @@ public:
 	static attotime from_double(double s) { return attotime(T(s)); }
 	static const attotime zero;
 	static const attotime never;
+	s64 seconds() const { return s64(std::floor(m_seconds)); }
 	double as_double() const { return double(m_seconds); }
 	u64 as_ticks(u32 freq) const { return u64(m_seconds * T(freq) + T(1e-9)); }
 	bool is_never() const { return m_seconds >= T(1e29); }
@@ -269,6 +271,7 @@ public:
 	virtual ~device_t() = default;
 	device_type type() const { return m_type; }
 	u32 clock() const { return m_clock; }
+	attotime clocks_to_attotime(u64 clocks) const { return attotime::from_ticks(clocks,m_clock); }
 	char const *tag() const { return m_tag.c_str(); }
 	char const *basetag() const { return m_tag.c_str(); }
 	std::string subtag(std::string const &t) const { return m_tag + ":" + t; }
@@ -411,6 +414,15 @@ public:
 	bool isunset() const { return !m_f; }
 private:
 	std::function<void(int)> m_f;
+};
+class devcb_read_line {
+public:
+ template<class U> devcb_read_line(U &,int d=0):value(d){}
+ bool isunset() const { return !fn; }
+ int operator()() const { return fn?fn():value; }
+ struct binder { devcb_read_line *p; void set(std::function<int()> f){p->fn=std::move(f);} };
+ binder bind(){return {this};}
+private: int value;std::function<int()> fn;
 };
 class devcb_write8
 {

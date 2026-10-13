@@ -76,9 +76,15 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	scc_chb = std::make_unique<z80scc_channel>(mcfg, "chb", scc.get(), 0);
 	m.scc = scc.get();
 	machine_t *const mp = &m;
+	fdd = std::make_unique<floppy_image_device>(mcfg);
+	fdc = std::make_unique<wd1772_device>(mcfg, "wd1772", nullptr, 8'000'000);
+	m.fdc = fdc.get(); m.fdd = fdd.get();
+	fdc->set_disable_motor_control(true);
+	fdc->intrq_wr_callback().set([mp](int state) { mp->irq_w(machine_t::FDCINT, state); });
+	if (!cfg.floppy_path.empty() && !fdd->load(cfg.floppy_path, err)) return false;
 	scc->out_int_callback().set([mp](int s) { mp->irq_w(machine_t::SCCINT, !s); });
 	m.hdc = hdc.get();
-	if (cfg.hd_path.empty() && !cfg.rom_only) { err = "no OS hard disk image set (D1)"; return false; }
+	if (cfg.hd_path.empty() && cfg.floppy_path.empty() && !cfg.rom_only) { err = "no OS disk set (D0 floppy or D1 hard disk)"; return false; }
 	if (!cfg.hd_path.empty() && !hd_img->load(cfg.hd_path)) { err = "cannot open hard disk image " + cfg.hd_path; return false; }
 	if (!cfg.cd_path.empty() && !cd_img->load(cfg.cd_path)) { err = "cannot open CD-ROM image " + cfg.cd_path; return false; }
 	scsi->set_external_device(0, static_cast<nscsi_device_interface *>(hdc.get()));
@@ -148,7 +154,7 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	}
 	order = { cpu.get(), fpu.get(), scsi.get(), hd.get(), hd_img.get(), cd.get(), cd_img.get(), cd_cdda.get() };
 	order.insert(order.end(), extra_order.begin(), extra_order.end());
-	order.insert(order.end(), { hdc.get(), scc.get(), scc_cha.get(), scc_chb.get() });
+	order.insert(order.end(), { hdc.get(), scc.get(), scc_cha.get(), scc_chb.get(), fdd.get(), fdc.get() });
 	return true;
 }
 
@@ -160,6 +166,8 @@ void runtime::impl::power_on()
 	for (device_t *d : order) d->start();
 	for (device_t *d : order) d->reset();
 	for (device_t *d : order) d->reset_after_children();
+	fdc->set_floppy(fdd.get());
+	fdc->dden_w(0);
 	m.irq_w(machine_t::SCNINT, 1);
 	scc->rxa_w(1);
 	std::sort(midi.ev.begin(), midi.ev.end(), [](auto const &x, auto const &y) { return x.first < y.first; });
@@ -200,6 +208,13 @@ bool runtime::open(runtime_config const &cfg, std::string &error)
 bool runtime::open_unpowered(runtime_config const &cfg, std::string &error) { return m->open(cfg, error); }
 void runtime::power_on() { m->power_on(); }
 void runtime::bind_thread() { m->bind(); }
+
+bool runtime::mount_floppy(std::string const &path, std::string &error) { return m->fdd->load(path,error); }
+void runtime::eject_floppy() { m->fdd->eject(); }
+bool runtime::check_floppy_image(std::string const &path,std::string &error)
+{
+ machine_config cfg; floppy_image_device disk(cfg); return disk.load(path,error);
+}
 
 void runtime::scanner_push(uint8_t byte) { m->m.scanner_push(byte); }
 void runtime::panel_switch(uint8_t code, bool down) { m->m.scanner_push(down ? 0xc0 : 0xc3); m->m.scanner_push(code); }

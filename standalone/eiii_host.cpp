@@ -32,7 +32,7 @@
 
 namespace {
 
-#define EIII_STANDALONE_VERSION "0.2.4-preview (standalone GUI/media settings and persistent OS disk changes)"
+#define EIII_STANDALONE_VERSION "0.2.5-preview (WD1772 D0 floppy IMG/HFE boot and media controls)"
 
 struct options_t
 {
@@ -65,6 +65,7 @@ void print_help()
 "                           e3-lsboot_ip381a_emu_systems_4088.ic3 + e3-msboot_ip380a_emu_systems_4088.ic4\n"
 "                           (or EIII_IP381A_L.Bin + EIII_IP380A_R.Bin; any letter case)\n"
 "  --hard IMAGE           SCSI ID 1 hard disk image (opened read-only; writes kept in RAM)\n"
+"  --floppy IMG/HFE       D0 EIII floppy image (write-protected)\n"
 "  --cdrom ISO            SCSI ID 3 CD-ROM image (read-only)\n"
 "live use\n"
 #ifdef _WIN32
@@ -145,7 +146,7 @@ void pc_hook(offs_t pc)
 int main(int argc, char **argv)
 {
 	char const *const env_rom = getenv("EIII_ROM_DIR");
-	std::string romdir = env_rom ? env_rom : "roms", pcfile, logfile, hdpath, cdpath, wavfile;
+	std::string romdir = env_rom ? env_rom : "roms", pcfile, logfile, hdpath, cdpath, floppypath, wavfile;
 	std::vector<std::pair<double, std::vector<u8>>> midi_events;  // (seconds, bytes)
 	double inject_at = -1;
 	std::string scriptfile;
@@ -159,7 +160,7 @@ int main(int argc, char **argv)
 	if(gui_defaults) {
 		load_gui_defaults(go);
 		if(!env_rom && !go.rom_dir.empty())romdir=go.rom_dir;
-		hdpath=go.hd;cdpath=go.cd;
+		hdpath=go.hd;cdpath=go.cd;floppypath=go.floppy;
 		g_opt.audio_out=go.audio_out;g_opt.midi_in=go.midi_in;g_opt.cem_model=go.cem_model;
 	}
 	double cycles = 0;              // 0 = run until stopped (realtime) or until the script/autoload says so
@@ -178,6 +179,7 @@ int main(int argc, char **argv)
 		else if (k == "--rom-only") rom_only = true;
 		else if (k == "--hard") hdpath = val();
 		else if (k == "--cdrom") cdpath = val();
+		else if (k == "--floppy") floppypath = val();
 		else if (k == "--cycles") cycles = atof(val());
 		else if (k == "--seconds") cycles = atof(val()) * CPU_HZ;
 		else if (k == "--wav") wavfile = val();
@@ -226,11 +228,11 @@ int main(int argc, char **argv)
 		}
 		else { fprintf(stderr, "eiii-standalone: unknown option '%s' (see --help)\n", k.c_str()); return 2; }
 	}
-	if (hdpath.empty() && !rom_only && !gui) { fprintf(stderr, "eiii-standalone: --hard <OS 2.42 hard disk image> is required (see --help)\n"); return 2; }
+	if (hdpath.empty() && floppypath.empty() && !rom_only && !gui) { fprintf(stderr, "eiii-standalone: --hard <OS disk> or --floppy <OS floppy> is required (see --help)\n"); return 2; }
 	if (gui)
 	{
 		go.rom_only = rom_only || hdpath.empty();
-		go.rom_dir = romdir; go.hd = hdpath; go.cd = cdpath; go.cem_model = g_opt.cem_model; go.cem_calib = g_opt.cem_calib;
+		go.rom_dir = romdir; go.hd = hdpath; go.cd = cdpath; go.floppy = floppypath; go.cem_model = g_opt.cem_model; go.cem_calib = g_opt.cem_calib;
 		go.midi_in = g_opt.midi_in; go.audio_out = g_opt.audio_out;
 		if (g_opt.period_frames) go.period = g_opt.period_frames;
 		if (g_opt.periods) go.periods = g_opt.periods;
@@ -256,7 +258,7 @@ int main(int argc, char **argv)
 	{
 		eiii::runtime_config rc;
 		rc.rom_only = rom_only;
-		rc.rom_dir = romdir; rc.hd_path = hdpath; rc.cd_path = cdpath;
+		rc.rom_dir = romdir; rc.hd_path = hdpath; rc.cd_path = cdpath; rc.floppy_path = floppypath;
 		rc.cem_model = g_opt.cem_model; rc.cem_calib = g_opt.cem_calib;
 		rc.sample_rate = 48000.0;
 		rc.midi_clock = !g_opt.midi_in.empty();     // scheduled MIDI also starts the clock (power_on)

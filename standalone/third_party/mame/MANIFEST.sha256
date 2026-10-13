@@ -496,3 +496,9 @@ ff6cedd10122bc2532679f4c30b91d70058bfe9383e79212e3ee20c5c34bc339  ./src/lib/util
 a863364814701683b4d497eccc52cb0670dc9ea2604f035168f5faf7be9378dc  ./src/lib/util/strformat.h
 7ea30b312e0b08003f4d999b7cdbf24a99d2107bd015e8d3dd89eb3ab8fd8b3a  ./src/lib/util/vecstream.h
 c531e6d759ae44a079bb314fd5d1ad3a729804b9d2f2747c0cc499f405cda31a  ./src/osd/osdcomm.h
+eacee09a3eb7ea69bdf4050b2797f5394751d118a28100242656c803178c157b  ./PROVENANCE.md
+6a11866b02d4dc52bdf26f51875206cc8a5472a77e26fe1390b3786e685a35f7  ./src/devices/machine/fdc_pll.cpp
+5afe98df47742ece1b7a7a535c2fa89dd699f57066bae52741ad90f5c8718f09  ./src/devices/machine/fdc_pll.h
+30b937b629d3e906e391c187ef187b12c70d1ddd6fa1e7df6a666b1cff3e2177  ./src/devices/machine/wd_fdc.cpp
+cb510250b7b5ace91cd4337aec216ea8dc2c69e6ca314107a896aa33841d557f  ./src/devices/machine/wd_fdc.h
+b88d414e8df4d45ce2d7d92587196491eea62b573d621cbd1ebde0f019c68d82  ./LICENSE-BSD-3-Clause.txt

@@ -28,11 +28,25 @@ int main(){
     auto rom=env("EIII_ROM_DIR");setenv("EIII_ROM_DIR","",1);
     {RackPlugin fresh;CHECK(fresh.config.rom_dir==rom,"selected ROM is remembered for a fresh instance without Save defaults");}
     setenv("EIII_ROM_DIR",rom.c_str(),1);
+    auto boot_floppy=env("EIII_BOOT_FLOPPY");
+    if(!boot_floppy.empty()){p->config.floppy_path=boot_floppy;p->config.hd_path.clear();}
     CHECK(component->initialize(nullptr)==kResultOk,"initialize");
     CHECK(component->getBusCount(kAudio,kOutput)==1 && component->getBusCount(kAudio,kInput)==1 && component->getBusCount(kEvent,kInput)==1,"stereo output + sampling input + MIDI bus");
     ParamID bend=0;CHECK(mapping->getMidiControllerAssignment(0,0,kPitchBend,bend)==kResultTrue,"pitch bend mapping");
     bool cc_mapped=true;for(int ch=0;ch<16;++ch)for(int cc=0;cc<130;++cc){ParamID id=0;cc_mapped=cc_mapped && mapping->getMidiControllerAssignment(0,ch,cc,id)==kResultTrue;}
     CHECK(cc_mapped,"CC, pitch bend and channel pressure map on all 16 MIDI channels");
+    {
+        RackPlugin state_only; state_only.config.floppy_path="disk-test.img";
+        MemoryStream v2;CHECK(state_only.getState(&v2)==kResultOk,"write v2 floppy project state");
+        state_only.config.floppy_path.clear();v2.seek(0,IBStream::kIBSeekSet,nullptr);
+        CHECK(state_only.setState(&v2)==kResultOk && state_only.config.floppy_path=="disk-test.img","floppy path round-trips per project");
+        char magic[8]={'E','I','I','I','V','S','T',1};MemoryStream legacy;
+        transfer(&legacy,magic,8,true);std::string empty,model="v1";
+        for(auto p:{&empty,&empty,&empty,&model,&empty})string_state(&legacy,*p,true,1u<<20);
+        for(int i=1;i<8;++i)string_state(&legacy,empty,true,256u<<20);
+        legacy.seek(0,IBStream::kIBSeekSet,nullptr);
+        CHECK(state_only.setState(&legacy)==kResultOk && state_only.config.floppy_path.empty(),"legacy v1 project state remains readable and has an empty floppy drive");
+    }
     ProcessSetup setup{kOffline,kSample32,256,48000.0};
     CHECK(processor->setupProcessing(setup)==kResultOk,"offline 48 kHz / 256 setup");
     CHECK(processor->getLatencySamples()==1024,"reports 1024-frame engine latency");
@@ -59,6 +73,13 @@ int main(){
     sum=0;count=0;pump(.5);double rms=std::sqrt(sum/std::max<size_t>(count,1));printf("MIDI playback RMS %.6f\n",rms);CHECK(rms>.05,"VST3 note-on plays sampled tone on stereo output");
     Event off{};off.type=Event::kNoteOffEvent;off.busIndex=0;off.sampleOffset=32;off.noteOff.channel=0;off.noteOff.pitch=43;off.noteOff.velocity=.5f;off.noteOff.noteId=1;events.addEvent(off);pump(2);
     int32 qi=0;auto *q=changes.addParameterData(bend,qi);int32 pi=0;q->addPoint(10,.75,pi);q->addPoint(200,.5,pi);block();CHECK(p->engine.stats().midi_dropped==0,"MIDI and pitch bend queues do not drop input");
+    if(!boot_floppy.empty()) {
+        MemoryStream floppy_state;CHECK(component->getState(&floppy_state)==kResultOk,"save active floppy-only VST3 project state");
+        processor->setProcessing(false);component->setActive(false);floppy_state.seek(0,IBStream::kIBSeekSet,nullptr);
+        p->config.floppy_path.clear();CHECK(component->setState(&floppy_state)==kResultOk && p->config.floppy_path==boot_floppy && p->config.hd_path.empty(),"restore floppy-only project with no HD");
+        component->terminate();mapping->release();controller->release();processor->release();component->release();factory->release();
+        printf("%s floppy VST3: %d failures\n",failures?"FAIL":"OK",failures);return failures?1:0;
+    }
     press("save_bank");CHECK(wait("SAVE BANK into",5),"OS Save Bank prompt");printf("Save prompt: %s\n",lcd().c_str());press("enter");printf("After save Enter: %s\n",lcd().c_str());
     CHECK(wait("Saving Bank",5),"OS writes bank sectors");
     CHECK(wait("P00 ",25),"OS saves sampled bank to D1");pump(2);printf("Saved screen: %s\n",lcd().c_str());

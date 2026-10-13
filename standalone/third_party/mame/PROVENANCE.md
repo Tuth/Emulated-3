@@ -7,3 +7,8 @@ Files are unmodified copies of that working tree; `MANIFEST.sha256` pins every b
 Licences: every MAME file here is `license:BSD-3-Clause` (src/lib/util/disasmintf.cpp carries no tag; MAME's src/lib is
 BSD-3-Clause). Berkeley SoftFloat 3e: see `3rdparty/softfloat3/COPYING.txt` (BSD-style, John R. Hauser).
 No E-mu ROM, operating system, sample or bank data is included anywhere in this tree.
+
+WD1772 addition (0.2.5): `wd_fdc.cpp/.h` and `fdc_pll.cpp/.h` are unmodified copies fetched from
+https://github.com/mamedev/mame at the same pinned commit `eb3856b8de1fd1209bbfa1968916c658e0273f14`.
+Copyright Olivier Galibert, BSD-3-Clause. The EIII read-only flux/drive adapter is project code in
+`standalone/shim/imagedev/floppy.h`, not MAME floppy-image code.

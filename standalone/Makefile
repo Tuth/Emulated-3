@@ -34,7 +34,7 @@ SRC_UI    = ../ui/raster.cpp ../ui/panel_view.cpp ../ui/panel_menu.cpp ../ui/x11
 LDLIBS_X  = -lX11 -lXext
 SRC_MAME  = $(addprefix $(MAME)/src/, devices/cpu/ns32000/ns32000.cpp devices/cpu/ns32000/ns32000d.cpp devices/machine/ns32081.cpp \
             devices/machine/nscsi_bus.cpp devices/machine/ncr5380.cpp devices/machine/nscsi_hle.cpp devices/bus/nscsi/hd.cpp \
-            devices/bus/nscsi/cd.cpp devices/machine/z80scc.cpp devices/machine/z80daisy.cpp lib/util/strformat.cpp \
+            devices/bus/nscsi/cd.cpp devices/machine/z80scc.cpp devices/machine/z80daisy.cpp devices/machine/wd_fdc.cpp devices/machine/fdc_pll.cpp lib/util/strformat.cpp \
             lib/util/coreutil.cpp lib/util/disasmintf.cpp)
 SRC_SF    = $(addprefix $(MAME)/,$(shell cat $(MAME)/softfloat3_files.txt 2>/dev/null))
 
@@ -100,6 +100,9 @@ $(BUILD)/tests/display_themes: ../tests/display_themes.cpp $(BUILD)/libeiiiui.a 
 	$(CXX) $(CXXFLAGS) -I.. -MMD -MP $< $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a $(LDLIBS) $(LDLIBS_X) -o $@
 
 # runtime tests (no MAME headers needed by the test sources)
+$(BUILD)/tests/floppy_controller: ../tests/floppy_controller.cpp $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a | $(BUILD)/tests
+	$(CXX) $(CXXFLAGS) $(INC) -MMD -MP $< $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a $(LDLIBS) -o $@
+
 $(BUILD)/tests/%: ../tests/%.cpp $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a | $(BUILD)/tests
 	$(CXX) $(CXXFLAGS) -I.. -MMD -MP $< $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a $(LDLIBS) -o $@
 $(BUILD)/tests:

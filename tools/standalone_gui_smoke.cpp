@@ -5,13 +5,14 @@
 int main(int argc,char **argv)
 {
 	using namespace eiii_test;
-	rig t(media_config());if(!t.wait_row(0,"P00 ",25))return 1;
-	gui_options cfg;cfg.rom_dir=env("EIII_ROM_DIR");cfg.hd=env("EIII_HD");
+	auto media=media_config();auto floppy=env("EIII_FLOPPY");if(!floppy.empty()){media.rt.floppy_path=floppy;media.rt.hd_path.clear();}
+	rig t(media);if(!t.wait_row(0,"P00 ",40))return 1;t.pump(1);
+	gui_options cfg;cfg.rom_dir=env("EIII_ROM_DIR");cfg.hd=media.rt.hd_path;cfg.floppy=floppy;
 	eiii::ui::panel_window win(t.ui);
 	standalone_menus(win,t.e,cfg,[](bool,std::string){},[]{});
-	for(auto id:{"settings","audio","midi","d1","d3"})if(win.view().find_menu(id)<0)return 2;
+	for(auto id:{"settings","audio","midi","d0","d1","d3"})if(win.view().find_menu(id)<0)return 2;
 	win.view().set_size(1472,564);eiii::ui::canvas frame;win.view().render(frame,t.ui,true);
-	win.view().open_menu(win.view().find_menu("settings"));win.view().render(frame,t.ui,true);
+	win.view().open_menu(win.view().find_menu(env("EIII_MENU","settings")));win.view().render(frame,t.ui,true);
 	if(argc>1 && !frame.write_png(argv[1]))return 3;
 	puts("PASS standalone menus render above the original OS panel");return 0;
 }

@@ -21,6 +21,8 @@ struct runtime::impl
 	machine_config mcfg;
 	std::unique_ptr<ns32016_device> cpu;
 	std::unique_ptr<ns32081_device> fpu;
+	std::unique_ptr<floppy_image_device> fdd;
+	std::unique_ptr<wd1772_device> fdc;
 	std::unique_ptr<nscsi_bus_device> scsi;
 	std::unique_ptr<nscsi_harddisk_device> hd;
 	std::unique_ptr<harddisk_image_device> hd_img;

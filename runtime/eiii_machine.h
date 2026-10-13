@@ -8,6 +8,8 @@
 #include "machine/ns32081.h"
 #include "machine/ncr5380.h"
 #include "machine/z80scc.h"
+#include "machine/wd_fdc.h"
+#include "imagedev/floppy.h"
 #include "../host/eiii_backend.h"
 #include <cmath>
 #include <cstdio>
@@ -59,10 +61,8 @@ struct machine_t : public address_space
 	bool lcd_display_on = false, lcd_cursor_on = false, lcd_blink_on = false; int lcd_disp_shift = 0, lcd_num_line = 1;
 	double lcd_busy_until = 0;
 	u16 leds = 0; u8 misc = 0;
-	// WD1772 (drive present, no disk): only the behaviour MAME shows on the EIII boot path is modelled —
-	// status 0x04 (TR00) before any command, 0xA4 (MON | SPIN | TR00) after a force-interrupt command, never INTRQ.
-	// Any other FDC access is logged as unmodelled.
-	u8 fdc_status = 0x04;
+	wd1772_device *fdc = nullptr;
+	floppy_image_device *fdd = nullptr;
 	// front-panel scanner, ported from emu3.cpp (scanner_r / scanner_push / scanner_irq): 16-byte FIFO, SCNINT asserted
 	// when the first byte enters an empty FIFO; every CSSCAN read pops one byte, releases SCNINT and, if bytes remain,
 	// re-asserts it 50 us later.  Extra switches: polled byte at 0xFA0000.
@@ -308,10 +308,10 @@ struct machine_t : public address_space
 		if ((a & ~1) == 0xeb0006) return lcd_data_r();
 		if (a >= 0xf50008 && a < 0xf50010)
 		{
-			if (log) fprintf(log, "FDC %06X cyc=%.0f pc=%06X d=%02X\n", a, now(), unsigned(cpu->state_pc()), (a == 0xf50008) ? fdc_status : 0);
-			if (a == 0xf50008) return fdc_status;
-			if (log) fprintf(log, "UNMODELLED FDC read %06X\n", a);
-			return 0;
+			if (!(mask & 0x00ff)) return 0;
+			u8 d = fdc->read((a - 0xf50008) >> 1);
+			if (log && a != 0xf5000e) fprintf(log, "FDC R %06X cyc=%.0f pc=%06X d=%02X\n", a, now(), unsigned(cpu->state_pc()), d);
+			return d;
 		}
 		if ((a & ~1) == 0xef0002) return 0x02;              // 6850 status: TDRE (stub)
 		if ((a & ~1) == 0xfa0000) return extra_switches;    // extra switches (emu3 'extra' port, low lane)
@@ -392,14 +392,13 @@ struct machine_t : public address_space
 		if ((a & ~1) == 0xd70000)
 		{
 			if (log_leds && BIT(b, 7) != BIT(misc, 7)) fprintf(stderr, "LEDS %.6f misc bit7 %d -> %d (latch %04X) LCD [%s] [%s]\n", now() / CPU_HZ, BIT(misc, 7), BIT(b, 7), leds, lcd_text(0).c_str(), lcd_text(1).c_str());
-			misc = b; return;
+			misc = b; if (fdd) { fdd->ss_w(!BIT(b, 4)); fdd->mon_w(BIT(b, 5)); } return;
 		}
 		if ((a & ~1) == 0x360000) { if (mask & 0x00ff) adc_ctrl = b; return; }
 		if (a >= 0xf50000 && a < 0xf50008)
 		{
 			if (log) fprintf(log, "FDC %06X cyc=%.0f pc=%06X d=%02X\n", a, now(), unsigned(cpu->state_pc()), b);
-			if (a == 0xf50000 && (b & 0xf0) == 0xd0) fdc_status = 0xa4;
-			else if (log) fprintf(log, "UNMODELLED FDC write %06X=%02X\n", a, b);
+			if (mask & 0x00ff) fdc->write((a - 0xf50000) >> 1, b);
 			return;
 		}
 		if (a >= 0xef0000 && a < 0xef0008) return;          // 6850 (stub)

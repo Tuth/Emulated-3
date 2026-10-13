@@ -32,7 +32,7 @@ struct panel_input
 //   cd, hd : the unit's own drives (SCSI 3 CD-ROM, SCSI 1 OS hard disk)      rom: boot ROM folder
 //   scsi   : SCSI ID 1, 3 or an extra drive at 4..7 (Dn in the OS)                                  cem_model: "v1" | "v2" (analog model)
 //   restart: cold boot with the current configuration
-enum class media_slot : uint8_t { cd, hd, rom, scsi, cem_model, restart, inspect, hd_changes };
+enum class media_slot : uint8_t { cd, hd, rom, scsi, cem_model, restart, inspect, hd_changes, floppy };
 char const *media_slot_name(media_slot s);          // "cd", "hd", "rom_dir", "scsi", "cem_model", "restart"
 
 struct media_request;

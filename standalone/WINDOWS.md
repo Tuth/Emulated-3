@@ -33,7 +33,7 @@ For a finite diagnostic run without a GUI:
     eiii-standalone.exe --rom-only --rom-dir roms --seconds 10 --log boot.log --pc-trace boot-pc.txt
 
 The supplied EPROMs must be kept separately and must not be committed or distributed.
-Display settings are stored in `%APPDATA%/eiii/gui.state`.
+Display settings are stored in `%APPDATA%/eiii/eiii-standalone-gui.state`.
 
 ## Initial limitations
 
@@ -59,6 +59,12 @@ The standalone never reads or changes `eiii-vst3.conf`. Existing command-line me
 
 Paths and successful device/media choices are saved automatically. Disk changes are checkpointed after the engine publishes them and flushed at normal exit. The source HD remains read-only; the disk sidecar is checked against the image fingerprint. On restart the OS and settings are read from the image plus that sidecar, not from an invented NVRAM/RAM snapshot. The original OS was tested changing MIDI Globals Poly to Omni: it writes disk sectors and a fresh instance restored from the sidecar retains Omni. Load the desired bank again after power-on.
 
-Floppy support is still a separate milestone: the current WD1772 path only models the no-disk boot behavior. Real D0 access needs command/data registers, sector geometry, data-request timing, IRQ, motor and side selection, then validation with an original EIII floppy image. CD/HD images are not floppy media.
+## 0.2.5 D0 floppy
+
+D0 Floppy > Insert floppy image accepts EIII 819200-byte raw IMG (80 tracks, 2 sides, 10 x 512-byte sectors) and HFE v1 (80 tracks, 2 sides, 250 kbit/s MFM). Click the front-panel floppy or eject control to operate D0; CD remains in D3. The MAME WD1772 runs at 8 MHz with actual rotating flux, index pulses, head stepping, motor and side signals. All floppy images are write protected; Save Bank/format onto floppy is not supported in this milestone. The original OS reports write protection.
+
+For a floppy-only cold boot: insert the OS floppy at D0, then choose D1 HD > Disconnect HD (cold boot). To cold boot after changing the D0 disk, use Settings > Restart. Mount/eject does not reset the running machine. A bad replacement is refused and retains the previous medium. `--floppy path/to/EIIIOS242.img` or `.hfe` also works without `--hard`. The D0 path is stored only in standalone defaults; VST3 uses its separate defaults/project state. See [floppy details](../docs/FLOPPY.md).
+
+IMG and HFE OS 2.42 boot, MIDI Globals menu loading, hot eject/reinsert, synthetic WD1772 sector/CRC/IRQ/write-protection checks and native VST3 sampling/MIDI/state regressions pass. Windows GUI/file-dialog confirmation remains a host-machine test. No ROM, OS or sample media is bundled.
 
 Validation: independent configuration/binary sidecar regression, original-OS Globals persistence across a fresh engine, actual menu rendering without an OS window, native VST3 sampling/MIDI/bank/state regression, and Windows cross builds. Windows file dialogs/device changes still require host-machine confirmation. Linux X11 window execution was unavailable in this environment; menu rendering was validated offscreen. The new file chooser and device-list GUI is intended for Windows.
