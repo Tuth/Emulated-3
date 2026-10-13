@@ -61,6 +61,8 @@ public:
 		size_t c = 2; while (c < frames) c <<= 1;
 		m_mask = c - 1; m_buf = std::make_unique<float[]>(c * 2);
 	}
+	// Only call while producer and consumer are stopped (a new engine activation).
+	void reset() { m_w.store(0); m_r.store(0); }
 	size_t capacity() const { return m_mask + 1; }
 	uint64_t write_index() const { return m_w.load(std::memory_order_acquire); }
 	uint64_t read_index() const { return m_r.load(std::memory_order_acquire); }

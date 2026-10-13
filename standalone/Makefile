@@ -38,6 +38,23 @@ SRC_MAME  = $(addprefix $(MAME)/src/, devices/cpu/ns32000/ns32000.cpp devices/cp
             lib/util/coreutil.cpp lib/util/disasmintf.cpp)
 SRC_SF    = $(addprefix $(MAME)/,$(shell cat $(MAME)/softfloat3_files.txt 2>/dev/null))
 
+# TARGET=windows: native MinGW-w64 or cross compilation from Linux.
+ifeq ($(TARGET),windows)
+CROSS ?= x86_64-w64-mingw32-
+CXX = $(CROSS)g++
+CC = $(CROSS)gcc
+AR = $(CROSS)ar
+BUILD = build/windows
+OUT = $(BUILD)/eiii-standalone.exe
+CXXFLAGS += -D_WIN32_WINNT=0x0601 -DNOMINMAX
+SRC_HOST := $(filter-out host_io.cpp,$(SRC_HOST)) host_io_win.cpp
+SRC_UI := $(filter-out ../ui/x11_window.cpp,$(SRC_UI)) ../ui/win32_window.cpp
+LDLIBS = -lwinmm -lpthread
+LDLIBS_X = -lgdi32 -luser32
+LDFLAGS += -static
+endif
+AR ?= ar
+
 OBJ       = $(addprefix $(BUILD)/obj/,$(notdir $(SRC_HOST:.cpp=.o) $(SRC_CORE:.cpp=.o) $(SRC_MAME:.cpp=.o)))
 OBJ_SF    = $(addprefix $(BUILD)/softfloat/,$(notdir $(SRC_SF:.c=.o)))
 TRACES   ?= $(HOME)/EIII_RE/analysis/traces/standalone_spike
@@ -50,7 +67,7 @@ eiii-standalone: $(BUILD)/eiii-standalone
 # everything except the standalone's main: the runtime library shared by the standalone, the tests and the plugin
 LIB_OBJS  = $(filter-out $(BUILD)/obj/eiii_host.o $(BUILD)/obj/eiii_gui.o,$(OBJ))
 $(BUILD)/libeiiiruntime.a: $(LIB_OBJS)
-	rm -f $@; ar rcs $@ $^
+	rm -f $@; $(AR) rcs $@ $^
 
 $(OUT): $(BUILD)/obj/eiii_host.o $(BUILD)/obj/eiii_gui.o $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a
 	$(CXX) $(LDFLAGS) -o $@ $(BUILD)/obj/eiii_host.o $(BUILD)/obj/eiii_gui.o $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a $(LDLIBS) $(LDLIBS_X)
@@ -60,7 +77,7 @@ OBJ_UI    = $(addprefix $(BUILD)/obj/,$(notdir $(SRC_UI:.cpp=.o))) $(BUILD)/obj/
 $(BUILD)/obj/fonts.o: ../ui/fonts.S ../third_party/fonts/*.ttf | $(BUILD)/obj
 	$(CC) -c $< -Wa,-I../third_party/fonts -o $@
 $(BUILD)/libeiiiui.a: $(OBJ_UI)
-	rm -f $@; ar rcs $@ $^
+	rm -f $@; $(AR) rcs $@ $^
 $(BUILD)/tools/clap_host_test: ../tools/clap_host_test.cpp | $(BUILD)/tools
 	$(CXX) $(CXXFLAGS) -I../third_party/clap/include $< -o $@ -lX11 -ldl -lpthread
 $(BUILD)/tools/%: ../tools/%.cpp $(BUILD)/libeiiiui.a $(BUILD)/libeiiiruntime.a $(BUILD)/libsoftfloat3.a | $(BUILD)/tools
@@ -89,7 +106,7 @@ $(BUILD)/tests:
 	mkdir -p $@
 
 $(BUILD)/libsoftfloat3.a: $(OBJ_SF)
-	rm -f $@; ar rcs $@ $^
+	rm -f $@; $(AR) rcs $@ $^
 
 define cxx_rule
 $(BUILD)/obj/$(notdir $(1:.cpp=.o)): $(1) | $(BUILD)/obj
@@ -179,3 +196,9 @@ clean:
 distclean: clean
 	rm -rf dist
 .PHONY: eiii-standalone release package debug asan check clean distclean plugin
+
+windows:
+	$(MAKE) TARGET=windows build/windows/eiii-standalone.exe
+.PHONY: windows
+
+include vst3.mk

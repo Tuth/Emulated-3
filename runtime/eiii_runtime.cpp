@@ -2,6 +2,7 @@
 // standalone has been proven with (instruction-identical to MAME); only process globals became instance state.
 #include "eiii_runtime_impl.h"
 #include <algorithm>
+#include "../standalone/file_offset.h"
 #include <dirent.h>
 
 namespace eiii {
@@ -76,8 +77,8 @@ bool runtime::impl::open(runtime_config const &c, std::string &err)
 	machine_t *const mp = &m;
 	scc->out_int_callback().set([mp](int s) { mp->irq_w(machine_t::SCCINT, !s); });
 	m.hdc = hdc.get();
-	if (cfg.hd_path.empty()) { err = "no OS hard disk image set (D1)"; return false; }
-	if (!hd_img->load(cfg.hd_path)) { err = "cannot open hard disk image " + cfg.hd_path; return false; }
+	if (cfg.hd_path.empty() && !cfg.rom_only) { err = "no OS hard disk image set (D1)"; return false; }
+	if (!cfg.hd_path.empty() && !hd_img->load(cfg.hd_path)) { err = "cannot open hard disk image " + cfg.hd_path; return false; }
 	if (!cfg.cd_path.empty() && !cd_img->load(cfg.cd_path)) { err = "cannot open CD-ROM image " + cfg.cd_path; return false; }
 	scsi->set_external_device(0, static_cast<nscsi_device_interface *>(hdc.get()));
 	scsi->set_external_device(1, static_cast<nscsi_device_interface *>(hd.get()));
@@ -211,7 +212,7 @@ static bool file_size(std::string const &path, uint64_t &size, std::string &erro
 {
 	FILE *f = fopen(path.c_str(), "rb");
 	if (!f) { error = std::string("cannot open ") + what + " " + path; return false; }
-	fseek(f, 0, SEEK_END); long const n = ftell(f); fclose(f);
+	eiii_fseek(f, 0, SEEK_END); int64_t const n = eiii_ftell(f); fclose(f);
 	if (n <= 0) { error = std::string(what) + " is empty or unreadable: " + path; return false; }
 	size = uint64_t(n);
 	return true;
@@ -301,7 +302,7 @@ bool runtime::write_image_with_changes(std::string const &image, std::string con
 		for (uint64_t i = 0; ok && i < count; ++i)
 		{
 			size_t const at = size_t(28 + i * 516);
-			if (fseeko(out, off_t(le(at, 4) * 512), SEEK_SET) != 0 || fwrite(changes.data() + at + 4, 1, 512, out) != 512) { error = "write error"; ok = false; }
+			if (eiii_fseek(out, int64_t(le(at, 4) * 512), SEEK_SET) != 0 || fwrite(changes.data() + at + 4, 1, 512, out) != 512) { error = "write error"; ok = false; }
 		}
 	}
 	if (fclose(out) != 0) ok = false;

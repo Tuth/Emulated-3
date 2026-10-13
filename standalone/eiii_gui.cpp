@@ -11,7 +11,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#ifndef _WIN32
 #include <poll.h>
+#endif
+#include "native_path.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
@@ -25,12 +31,17 @@ void on_signal(int) { s_quit = true; }
 std::string gui_state_path(bool create_dir)
 {
 	std::string dir;
+#ifdef _WIN32
+	if (char const *x = getenv("APPDATA"); x && *x) dir = x;
+	else return {};
+#else
 	if (char const *x = getenv("XDG_CONFIG_HOME"); x && *x) dir = x;
 	else if (char const *h = getenv("HOME"); h && *h) dir = std::string(h) + "/.config";
 	else return {};
-	if (create_dir) mkdir(dir.c_str(), 0755);
+#endif
+	if (create_dir) eiii::create_native_directory(dir);
 	dir += "/eiii";
-	if (create_dir) mkdir(dir.c_str(), 0755);
+	if (create_dir) eiii::create_native_directory(dir);
 	return dir + "/gui.state";
 }
 void load_gui_state(eiii::panel_adapter &ui)
@@ -45,13 +56,19 @@ void save_gui_state(std::string const &state)
 	std::ofstream out(p + ".tmp");
 	out << state;
 	out.close();
+	#ifdef _WIN32
+	if (out) MoveFileExA((p + ".tmp").c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+#else
 	if (out) std::rename((p + ".tmp").c_str(), p.c_str());
+#endif
 }
 }
 
 int run_gui(gui_options const &o)
 {
+	s_quit = false;
 	eiii::engine_config ec;
+	ec.rt.rom_only = o.rom_only;
 	ec.rt.rom_dir = o.rom_dir; ec.rt.hd_path = o.hd; ec.rt.cd_path = o.cd;
 	ec.rt.cem_model = o.cem_model; ec.rt.cem_calib = o.cem_calib;
 	ec.rt.sample_rate = 48000.0;
@@ -128,10 +145,19 @@ int run_gui(gui_options const &o)
 	auto last_frame = std::chrono::steady_clock::now(), last_state_check = last_frame;
 	while (!s_quit && !win.close_requested())
 	{
+#ifndef _WIN32
 		pollfd p{ win.fd(), POLLIN, 0 };
 		poll(&p, 1, 8);
+#else
+		std::this_thread::sleep_for(std::chrono::milliseconds(8));
+#endif
 		auto const now = std::chrono::steady_clock::now();
-		if ((p.revents & POLLIN) || now - last_frame >= std::chrono::milliseconds(16)) { win.tick(); last_frame = now; }
+#ifndef _WIN32
+		if ((p.revents & POLLIN) || now - last_frame >= std::chrono::milliseconds(16))
+#else
+		if (now - last_frame >= std::chrono::milliseconds(16))
+#endif
+		{ win.tick(); last_frame = now; }
 		if (now - last_state_check >= std::chrono::seconds(1))
 		{
 			last_state_check = now;

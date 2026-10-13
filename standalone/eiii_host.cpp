@@ -57,24 +57,31 @@ void print_help()
 "eiii-standalone %s\n"
 "E-mu Emulator III runtime: original boot ROM + OS from the original disk images, original UI/MIDI paths,\n"
 "portable F-Chip + software CEM3387 output.  No E-mu material is built in; supply your own ROMs and images.\n\n"
-"usage: eiii-standalone --hard OS_HD_IMAGE [options]\n\n"
+"usage: eiii-standalone (--hard OS_HD_IMAGE | --rom-only) [options]\n\n"
 "media / firmware\n"
+"  --rom-only             diagnostic boot without OS media (sampler OS will not load)\n"
 "  --rom-dir DIR          boot ROM directory (default $EIII_ROM_DIR, else ./roms):\n"
 "                           e3-lsboot_ip381a_emu_systems_4088.ic3 + e3-msboot_ip380a_emu_systems_4088.ic4\n"
 "                           (or EIII_IP381A_L.Bin + EIII_IP380A_R.Bin; any letter case)\n"
 "  --hard IMAGE           SCSI ID 1 hard disk image (opened read-only; writes kept in RAM)\n"
 "  --cdrom ISO            SCSI ID 3 CD-ROM image (read-only)\n"
 "live use\n"
+#ifdef _WIN32
+"  --midi-in NUMBER       Windows MIDI input device (see --list-midi)\n"
+"  --audio-out DEV        Windows waveOut output: default or device number (see --list-audio)\n"
+"  --period N / --periods N   buffer size in frames (256) / number of buffers (4)\n"
+#else
 "  --midi-in DEV          ALSA raw MIDI input, e.g. hw:1,0,0 (see --list-midi); bytes go to the Z85230 MIDI IN\n"
 "  --audio-out DEV        ALSA PCM output, e.g. default or plughw:0,0 (see --list-audio); 48 kHz stereo\n"
 "  --period N / --periods N   ALSA period size in frames (256) / number of periods (4)\n"
+#endif
 "  --realtime             pace to the wall clock when no --audio-out is given (with --audio-out the device paces)\n"
 "  --autoload-bank N      operate the ORIGINAL front panel to load bank N: Load Bank, Enter, drive, Enter, N, Enter\n"
 "  --drive D              drive for --autoload-bank (default 3 = SCSI CD-ROM)\n"
 "  --preset P             then select preset P on the keypad (after --autoload-bank, or on its own)\n"
 "  --list-midi / --list-audio   list devices and exit\n"
 "front panel\n"
-"  --gui                  show the rack front panel (X11) and operate the instrument from it; with --audio-out,\n"
+"  --gui                  show the rack front panel and operate the instrument from it; with --audio-out,\n"
 "                         --midi-in, --autoload-bank/--preset as above (scripts/debug options are for the headless mode)\n"
 "  --scale PCT            panel size, 100 = 1472 x 538 (125, 150, 200 for HiDPI); the window is also resizable\n"
 "  --quit-after S / --screenshot FILE.png   (GUI tests) quit after S emulated seconds / save the window contents\n"
@@ -141,6 +148,7 @@ int main(int argc, char **argv)
 	std::vector<std::pair<double, std::vector<u8>>> midi_events;  // (seconds, bytes)
 	double inject_at = -1;
 	std::string scriptfile;
+	bool rom_only = false;
 	bool gui = false; gui_options go;
 	double cycles = 0;              // 0 = run until stopped (realtime) or until the script/autoload says so
 	for (int i = 1; i < argc; ++i)
@@ -155,6 +163,7 @@ int main(int argc, char **argv)
 		else if (k == "--list-midi") { return list_midi_inputs(); }
 		else if (k == "--list-audio") { return list_audio_outputs(); }
 		else if (k == "--rom-dir") romdir = val();
+		else if (k == "--rom-only") rom_only = true;
 		else if (k == "--hard") hdpath = val();
 		else if (k == "--cdrom") cdpath = val();
 		else if (k == "--cycles") cycles = atof(val());
@@ -205,9 +214,10 @@ int main(int argc, char **argv)
 		}
 		else { fprintf(stderr, "eiii-standalone: unknown option '%s' (see --help)\n", k.c_str()); return 2; }
 	}
-	if (hdpath.empty()) { fprintf(stderr, "eiii-standalone: --hard <OS 2.42 hard disk image> is required (see --help)\n"); return 2; }
+	if (hdpath.empty() && !rom_only) { fprintf(stderr, "eiii-standalone: --hard <OS 2.42 hard disk image> is required (see --help)\n"); return 2; }
 	if (gui)
 	{
+		go.rom_only = rom_only;
 		go.rom_dir = romdir; go.hd = hdpath; go.cd = cdpath; go.cem_model = g_opt.cem_model; go.cem_calib = g_opt.cem_calib;
 		go.midi_in = g_opt.midi_in; go.audio_out = g_opt.audio_out;
 		if (g_opt.period_frames) go.period = g_opt.period_frames;
@@ -233,6 +243,7 @@ int main(int argc, char **argv)
 	eiii::runtime rt;
 	{
 		eiii::runtime_config rc;
+		rc.rom_only = rom_only;
 		rc.rom_dir = romdir; rc.hd_path = hdpath; rc.cd_path = cdpath;
 		rc.cem_model = g_opt.cem_model; rc.cem_calib = g_opt.cem_calib;
 		rc.sample_rate = 48000.0;

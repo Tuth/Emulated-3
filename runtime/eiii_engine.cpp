@@ -320,6 +320,14 @@ void engine::apply_media(media_request &rq, bool live)
 void engine::start(engine_config const &cfg)
 {
 	shutdown();
+	// A fresh activation must not play audio or apply MIDI left in the previous host session.
+	m_ring.reset(); m_in.reset();
+	midi_record mi; while (m_midi.pop(mi)) { }
+	panel_record pi; while (m_panel.pop(pi)) { }
+	media_request *rq;
+	while (m_media_in.pop(rq)) delete rq;
+	while (m_media_out.pop(rq)) delete rq;
+	m_media_inflight = 0;
 	m_cfg = cfg;
 	m_realtime = cfg.realtime;
 	double const sr = cfg.rt.sample_rate;

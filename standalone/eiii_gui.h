@@ -11,7 +11,7 @@ struct gui_options
 	double scale = 100.0;           // percent of 1472 x 538
 	double quit_after = 0;          // emulated seconds (tests); 0 = until the window is closed
 	std::string screenshot;         // PNG of the window contents at exit (tests)
-	bool verbose = false;
+	bool verbose = false, rom_only = false;
 };
 
 int run_gui(gui_options const &o);

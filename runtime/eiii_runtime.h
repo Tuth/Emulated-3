@@ -23,6 +23,7 @@ constexpr bool scsi_extra_id(unsigned id) { return id >= 4 && id <= 7; }
 
 struct runtime_config
 {
+	bool rom_only = false;         // explicit boot-ROM diagnostic without an OS disk
 	std::string rom_dir;            // e3-lsboot_ip381a_emu_systems_4088.ic3 / e3-msboot_ip380a_emu_systems_4088.ic4
 	std::string hd_path;            // OS 2.42 hard disk image (SCSI ID 1), opened read-only
 	std::string cd_path;            // optional CD-ROM image (SCSI ID 3)

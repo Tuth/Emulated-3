@@ -1,13 +1,21 @@
 // panel_window — see panel_window.h.
 #include "panel_window.h"
+#ifdef _WIN32
+#include "win32_keys.h"
+#else
 #include <X11/keysym.h>
+#endif
 #include <cstdio>
 
 namespace eiii::ui {
 
-bool panel_window::open(unsigned long parent, int w, int h, std::string &error)
+bool panel_window::open(uintptr_t parent, int w, int h, std::string &error)
 {
 	m_close = false;
+	m_win.cb.resize_requested = on_resize_request;
+	m_win.cb.resize_finished = on_resize_finish;
+	m_win.cb.tick = [this] { tick(); };
+	m_win.cb.error = [this](std::string const &error) { m_view.set_menu_status(error); m_full = true; };
 	m_view.set_size(w, h);
 	if (!m_win.open(parent, w, h, "E-mu Emulator III", error)) return false;
 	if (!parent) m_win.set_aspect(int(panel_w), int(panel_view::total_h(m_view.has_menu_bar())));
@@ -36,6 +44,7 @@ void panel_window::tick()
 	if (!m_win.is_open()) return;
 	m_win.pump();
 	m_ui.poll();
+	if (on_tick) on_tick();
 	recti const r = m_view.render(m_frame, m_ui, m_full);
 	if (m_full) m_win.present(m_frame, { 0, 0, m_frame.w, m_frame.h });
 	else if (!r.empty()) m_win.present(m_frame, r);

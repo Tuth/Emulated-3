@@ -1,5 +1,6 @@
 // Runtime for the shim: scheduler, globals, image devices.
 #include "emu.h"
+#include "../file_offset.h"
 #include "imagedev/harddriv.h"
 #include "imagedev/cdromimg.h"
 #include "sound/cdda.h"
@@ -72,13 +73,15 @@ bool harddisk_image_device::load(std::string const &path)
 {
 	m_f = fopen(path.c_str(), "rb");
 	if (!m_f) return false;
-	fseek(m_f, 0, SEEK_END); m_length = u64(ftell(m_f));
+	eiii_fseek(m_f, 0, SEEK_END); m_length = u64(eiii_ftell(m_f));
 	// ask the kernel to start reading the OS image into the page cache now (asynchronously), so the boot's SCSI reads
 	// do not wait for the disk while the engine thread must stay ahead of the audio
+#ifndef _WIN32
 	posix_fadvise(fileno(m_f), 0, 0, POSIX_FADV_WILLNEED);
+#endif
 	{
 		u8 buf[65536];
-		fseek(m_f, 0, SEEK_SET);
+		eiii_fseek(m_f, 0, SEEK_SET);
 		size_t const n = fread(buf, 1, sizeof buf, m_f);
 		m_fingerprint = 1469598103934665603ull;
 		for (size_t i = 0; i < n; ++i) { m_fingerprint ^= buf[i]; m_fingerprint *= 1099511628211ull; }
@@ -106,7 +109,7 @@ bool harddisk_image_device::read(u32 lba, void *buffer)
 	if (device_t::s_log) fprintf(device_t::s_log, "HDRD t=%.6f lba=%08X\n", double(shim_sched().time().m_seconds), lba);
 	if (auto it = m_overlay.find(lba); it != m_overlay.end()) { memcpy(buffer, it->second.data(), 512); return true; }
 	if (!m_f || u64(lba + 1) * 512 > m_length) return false;
-	fseek(m_f, long(u64(lba) * 512), SEEK_SET);
+	eiii_fseek(m_f, int64_t(u64(lba) * 512), SEEK_SET);
 	return fread(buffer, 1, 512, m_f) == 512;
 }
 
@@ -156,7 +159,7 @@ bool cdrom_image_device::load(std::string const &path)
 	unload();
 	m_f = fopen(path.c_str(), "rb");
 	if (!m_f) return false;
-	fseek(m_f, 0, SEEK_END); u64 const size = u64(ftell(m_f));
+	eiii_fseek(m_f, 0, SEEK_END); u64 const size = u64(eiii_ftell(m_f));
 	if (size % 2048) { fclose(m_f); m_f = nullptr; return false; }  // only the MODE1/2048 ISO case is supported
 	m_frames = u32(size / 2048);
 	++m_seq;
@@ -173,7 +176,7 @@ bool cdrom_image_device::read_data(u32 lba, void *buffer, u32 datatype, bool)
 	if (device_t::s_log) fprintf(device_t::s_log, "CDRD t=%.6f lba=%08X type=%u f=%d frames=%u\n", double(shim_sched().time().m_seconds), lba, datatype, m_f != nullptr, m_frames);
 	if (!m_f || lba >= m_frames) return false;
 	if (datatype != cdrom_file::CD_TRACK_MODE1 && datatype != cdrom_file::CD_TRACK_RAW_DONTCARE) return false;
-	fseek(m_f, long(u64(lba) * 2048), SEEK_SET);
+	eiii_fseek(m_f, int64_t(u64(lba) * 2048), SEEK_SET);
 	return fread(buffer, 1, 2048, m_f) == 2048;
 }
 

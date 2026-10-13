@@ -374,7 +374,7 @@ void panel_view::draw_contrast(canvas &c, element const &e, double v)
 {
 	draw_button(c, e, false);
 	float const s = m_s, cx = m_xf.X(e.x), cy = m_xf.Y(e.y), r = e.r * s;
-	double const a = (-135.0 + 270.0 * v) * M_PI / 180.0;
+	double const a = (-135.0 + 270.0 * v) * 3.14159265358979323846 / 180.0;
 	fill_line(c, cx + float(std::sin(a)) * r * 0.35f, cy - float(std::cos(a)) * r * 0.35f, cx + float(std::sin(a)) * r * 0.82f, cy - float(std::cos(a)) * r * 0.82f, 1.6f * s, rgba::hex(0xb8b8b8));
 }
 

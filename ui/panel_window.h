@@ -11,9 +11,10 @@ class panel_window
 {
 public:
 	explicit panel_window(panel_adapter &ui) : m_ui(ui) { }
-	bool open(unsigned long parent, int w, int h, std::string &error);
+	bool open(uintptr_t parent, int w, int h, std::string &error);
 	void close() { m_win.close(); }
 	bool is_open() const { return m_win.is_open(); }
+	uintptr_t native_handle() const { return m_win.window_id(); }
 	int fd() const { return m_win.fd(); }
 	void tick();
 	void set_size(int w, int h);
@@ -21,6 +22,9 @@ public:
 	int width() const { return m_view.width(); }
 	int height() const { return m_view.height(); }
 	bool close_requested() const { return m_close; }
+	std::function<void()> on_tick;
+	std::function<void(int w,int h)> on_resize_request;
+	std::function<void()> on_resize_finish;
 	bool keyboard_shortcuts = true;             // digits, Return, arrows, +/-  -> panel buttons (top-level window)
 	panel_view &view() { return m_view; }
 	canvas const &frame() const { return m_frame; }

@@ -68,9 +68,9 @@ x11_window::x11_window() : m(new impl) { }
 x11_window::~x11_window() { close(); delete m; }
 bool x11_window::is_open() const { return m->dpy && m->win; }
 int x11_window::fd() const { return m->dpy ? ConnectionNumber(m->dpy) : -1; }
-unsigned long x11_window::window_id() const { return m->win; }
+uintptr_t x11_window::window_id() const { return m->win; }
 
-bool x11_window::open(unsigned long parent, int w, int h, char const *title, std::string &error)
+bool x11_window::open(uintptr_t parent, int w, int h, char const *title, std::string &error)
 {
 	close();
 	m->dpy = XOpenDisplay(nullptr);

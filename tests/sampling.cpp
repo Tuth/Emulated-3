@@ -51,10 +51,11 @@ int main()
 	t.press("load_bank"); t.wait_row(0, "   LOAD BANK from", 3.0); t.pump(0.3);
 	t.press("enter"); t.wait_text("Select a Drive", 3.0);
 	t.press("keypad_3"); t.pump(0.5);
-	bool const d3 = t.row(1).compare(0, 3, "D3 ") == 0;
+	// With no CD inserted, the original OS falls back to the internal HD.
+	bool const drive = t.row(1).compare(0, 3, cfg.rt.cd_path.empty() ? "D1 " : "D3 ") == 0;
 	t.press("enter");
 	bool const listed = !cfg.rt.cd_path.empty() ? t.wait_text("Select a Bank", 10.0) : true;
-	CHECK(d3 && listed, "with a loud tone on the input the panel works normally: [%s] [%s]", t.row(1).c_str(), t.row(3).c_str());
+	CHECK(drive && listed, "with a loud tone on the input the panel works normally: [%s] [%s]", t.row(1).c_str(), t.row(3).c_str());
 	t.press("load_bank"); t.wait_row(0, "P00 ", 3.0);
 	tone_on = 1e30; t.pump(0.5);
 

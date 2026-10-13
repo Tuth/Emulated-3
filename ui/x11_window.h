@@ -18,7 +18,10 @@ public:
 		std::function<void(int x, int y)> move;
 		std::function<void(int x, int y, int steps)> wheel;
 		std::function<void(int w, int h)> resized;
-		std::function<void()> expose, close_request, focus_out;
+		std::function<void()> expose, close_request, focus_out, tick;
+		std::function<void(std::string const &)> error;
+		std::function<void(int w,int h)> resize_requested;
+		std::function<void()> resize_finished;
 		std::function<void(unsigned long keysym, bool down)> key;
 	};
 	x11_window();
@@ -27,11 +30,11 @@ public:
 	x11_window &operator=(x11_window const &) = delete;
 
 	// parent = 0: top-level window with this title and a fixed aspect ratio; else a child of the host's window
-	bool open(unsigned long parent, int w, int h, char const *title, std::string &error);
+	bool open(uintptr_t parent, int w, int h, char const *title, std::string &error);
 	void close();
 	bool is_open() const;
 	int fd() const;
-	unsigned long window_id() const;
+	uintptr_t window_id() const;
 	void pump();                                      // handle all pending events (non-blocking)
 	void present(canvas const &c, recti r);           // copy a region of the canvas to the window
 	void set_size(int w, int h);
