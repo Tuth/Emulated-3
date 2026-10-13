@@ -23,7 +23,7 @@ inline std::string standalone_pick(eiii::ui::panel_window &win, char const *filt
 #endif
 }
 inline void standalone_menus(eiii::ui::panel_window &win,eiii::engine &eng,gui_options &cfg,
-	std::function<void(bool,std::string)> request_io,std::function<void()> save)
+	std::function<void(bool,std::string)> request_io,std::function<void()> save,std::function<unsigned()> xruns={})
 {
 	using namespace eiii::ui;using eiii::media_slot;
 	auto change=[&win,&eng](media_slot slot,std::string const &path){if(!eng.set_media(slot,path))win.view().set_menu_status("Request queue is full; retry");};
@@ -43,12 +43,20 @@ inline void standalone_menus(eiii::ui::panel_window &win,eiii::engine &eng,gui_o
 		v.push_back(menu_item::sep());
 		for(auto model:{"v1","v2"})v.push_back({std::string("Analog model ")+model,cfg.cem_model==model,true,false,false,[change,model]{change(media_slot::cem_model,model);}});
 		v.push_back(menu_item::info("Standalone settings are separate from VST3"));return v;}});
-	menus.push_back({"audio",[]{return "Audio";},[&cfg,request_io]{std::vector<menu_item> v;
+	menus.push_back({"audio",[]{return "Audio";},[&cfg,&eng,request_io,xruns]{std::vector<menu_item> v;
 		v.push_back({"No audio output",cfg.audio_out.empty(),true,false,false,[request_io]{request_io(true,"");}});
 		v.push_back({"System default",cfg.audio_out=="default",true,false,false,[request_io]{request_io(true,"default");}});
 #ifdef _WIN32
 		for(UINT i=0;i<waveOutGetNumDevs();++i){WAVEOUTCAPSA c{};if(!waveOutGetDevCapsA(i,&c,sizeof c)){auto id=std::to_string(i);v.push_back({eiii::native_display(c.szPname),cfg.audio_out==id,true,false,false,[request_io,id]{request_io(true,id);}});}}
 #endif
+		v.push_back(menu_item::sep());
+		for(unsigned count:{2u,4u,8u}) {
+			char label[96];snprintf(label,sizeof label,"%u buffers: %.1f ms output queue",count,cfg.period*count/48.0);
+			v.push_back({label,cfg.periods==count,true,false,false,[&cfg,request_io,count]{cfg.periods=count;request_io(true,cfg.audio_out);}});
+		}
+		char info[160];auto stats=eng.stats();snprintf(info,sizeof info,"Engine queue %.1f ms; underruns %llu; output %u",eng.latency()/48.0,(unsigned long long)stats.underruns,xruns?xruns():0);
+		v.push_back(menu_item::info(info));
+		v.push_back(menu_item::info("Driver adds latency; fewer buffers reduce delay"));
 		v.push_back(menu_item::info("WinMM output; device changes keep the machine running"));return v;}});
 	menus.push_back({"midi",[]{return "MIDI In";},[&cfg,request_io]{std::vector<menu_item> v;
 		v.push_back({"No MIDI input",cfg.midi_in.empty(),true,false,false,[request_io]{request_io(false,"");}});

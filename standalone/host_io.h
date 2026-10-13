@@ -27,6 +27,9 @@ public:
 	~audio_output();
 	// 48 kHz stereo S16; period/periods 0 = defaults (256 frames x 4)
 	bool open(std::string const &name, unsigned rate, unsigned period_frames, unsigned periods);
+	// Windows: wait for a reusable waveOut buffer BEFORE consuming engine audio.
+	// Other backends pace in write(); this returns immediately there.
+	bool wait_writable(unsigned timeout_ms = 250);
 	// blocking write of interleaved stereo float (+-1.0 full scale); recovers from underruns and counts them
 	void write(float const *interleaved, size_t frames);
 	unsigned xruns() const { return m_xruns; }

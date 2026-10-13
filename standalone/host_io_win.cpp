@@ -48,14 +48,23 @@ struct midi_state {
 };
 struct audio_state {
     HWAVEOUT handle=nullptr;
+    HANDLE event=nullptr;
+    bool timer_resolution=false,started=false;
+    size_t primed=0;
     std::vector<WAVEHDR> headers;
     std::vector<std::vector<int16_t>> data;
     size_t next=0;
+    static bool queued(WAVEHDR const &h) {
+        return (h.dwFlags & WHDR_INQUEUE) && !(h.dwFlags & WHDR_DONE);
+    }
     ~audio_state() {
-        if(!handle)return;
-        waveOutReset(handle);
-        for(auto &h:headers) if(h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(handle,&h,sizeof h);
-        waveOutClose(handle);
+        if(handle) {
+            waveOutReset(handle);
+            for(auto &h:headers) if(h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(handle,&h,sizeof h);
+            waveOutClose(handle);
+        }
+        if(event)CloseHandle(event);
+        if(timer_resolution)timeEndPeriod(1);
     }
 };
 }
@@ -80,17 +89,52 @@ bool audio_output::open(std::string const &name,unsigned rate,unsigned period_fr
     if(period>65536 || count>64 || count<2)return false;
     WAVEFORMATEX f{};f.wFormatTag=WAVE_FORMAT_PCM;f.nChannels=2;f.nSamplesPerSec=rate;f.wBitsPerSample=16;f.nBlockAlign=4;f.nAvgBytesPerSec=rate*4;
     auto s=std::make_unique<audio_state>();
-    if(waveOutOpen(&s->handle,id,&f,0,0,CALLBACK_NULL)){return false;}
+    s->event=CreateEventA(nullptr,TRUE,FALSE,nullptr);
+    if(!s->event)return false;
+    s->timer_resolution=timeBeginPeriod(1)==TIMERR_NOERROR;
+    if(waveOutOpen(&s->handle,id,&f,reinterpret_cast<DWORD_PTR>(s->event),0,CALLBACK_EVENT))return false;
+    // Start with a full hardware queue, rather than playing the first block
+    // immediately while the remaining blocks are still being produced.
+    if(waveOutPause(s->handle))return false;
     s->headers.resize(count);s->data.resize(count);m_period=period;m_buffer=period*count;
     for(size_t i=0;i<count;++i){s->data[i].resize(period*2);auto &h=s->headers[i];h.lpData=reinterpret_cast<char *>(s->data[i].data());h.dwBufferLength=period*4;if(waveOutPrepareHeader(s->handle,&h,sizeof h))return false;}
+    ResetEvent(s->event);
     m_h=s.release();return true;
+}
+bool audio_output::wait_writable(unsigned timeout_ms) {
+    auto *s=static_cast<audio_state *>(m_h);if(!s)return false;
+    auto &h=s->headers[s->next];
+    ULONGLONG const deadline=GetTickCount64()+timeout_ms;
+    while(audio_state::queued(h)) {
+        // Reset then recheck: a completion between these two operations must
+        // not be lost, nor may an old signalled event cause a busy spin.
+        ResetEvent(s->event);
+        if(!audio_state::queued(h))break;
+        auto now=GetTickCount64();
+        if(now>=deadline || WaitForSingleObject(s->event,DWORD(deadline-now))!=WAIT_OBJECT_0) {
+            ++m_xruns;if(on_xrun)on_xrun(m_xruns);return false;
+        }
+    }
+    if(s->started && std::none_of(s->headers.begin(),s->headers.end(),audio_state::queued)) {
+        // The device consumed its whole queue: count the real starvation and
+        // refill before restarting, instead of repeatedly starting tiny blocks.
+        ++m_xruns;if(on_xrun)on_xrun(m_xruns);
+        if(waveOutPause(s->handle))return false;
+        s->started=false;s->primed=0;
+    }
+    return true;
 }
 void audio_output::write(float const *p,size_t frames){
     auto *s=static_cast<audio_state *>(m_h);if(!s)return;
-    while(frames){size_t n=std::min<size_t>(frames,m_period);auto &h=s->headers[s->next];
-        while((h.dwFlags & WHDR_INQUEUE) && !(h.dwFlags & WHDR_DONE))Sleep(1);
+    while(frames){
+        if(!wait_writable())return;
+        size_t n=std::min<size_t>(frames,m_period);auto &h=s->headers[s->next];
         auto &d=s->data[s->next];for(size_t i=0;i<n*2;++i){float v=std::isfinite(p[i])?p[i]:0;d[i]=int16_t(std::clamp(v,-1.f,1.f)*32767.f);}
         h.dwBufferLength=DWORD(n*4);if(waveOutWrite(s->handle,&h,sizeof h)){++m_xruns;if(on_xrun)on_xrun(m_xruns);return;}
         s->next=(s->next+1)%s->headers.size();frames-=n;p+=n*2;
+        if(!s->started && ++s->primed==s->headers.size()) {
+            if(waveOutRestart(s->handle)){++m_xruns;if(on_xrun)on_xrun(m_xruns);return;}
+            s->started=true;
+        }
     }
 }

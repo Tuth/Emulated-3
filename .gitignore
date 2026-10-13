@@ -12,6 +12,7 @@ dist/
 # Built test / tool / standalone binaries (sources have extensions)
 /tests/*
 !/tests/*.*
+!/tests/winmm_mock/
 /tools/*
 !/tools/*.*
 /standalone/eiii-standalone

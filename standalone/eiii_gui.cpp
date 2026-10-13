@@ -75,43 +75,53 @@ int run_gui(gui_options const &o)
 	load_gui_state(ui);
 	std::string saved_state = ui.display_state();
 
-	struct io_state {std::mutex mutex;std::string audio,midi,error;unsigned requested=1,applied=0;};
-	io_state io;io.audio=o.audio_out;io.midi=o.midi_in;
-	auto request_io=[&](bool audio,std::string name){std::lock_guard<std::mutex> g(io.mutex);(audio?io.audio:io.midi)=std::move(name);++io.requested;};
+	struct io_state {std::mutex mutex;std::string audio,midi,error;unsigned requested=1,applied=0,periods=4;};
+	io_state io;io.audio=o.audio_out;io.midi=o.midi_in;io.periods=o.periods;
+	std::atomic<unsigned> driver_xruns{0};
+	auto request_io=[&](bool audio,std::string name){std::lock_guard<std::mutex> g(io.mutex);(audio?io.audio:io.midi)=std::move(name);io.periods=cfg.periods;++io.requested;};
 	// Only this thread owns WinMM/ALSA handles. Failed device changes keep the previous device.
 	std::thread audio([&] {
+#ifdef _WIN32
+		int const old_priority=GetThreadPriority(GetCurrentThread());
+		SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
 		std::unique_ptr<midi_input> mi;std::unique_ptr<audio_output> ao;
-		std::string current_audio,current_midi;unsigned revision=0;
+		std::string current_audio,current_midi;unsigned revision=0,current_periods=o.periods;
 		unsigned const n=o.period;
 		std::vector<float> l(n),r(n),lr(2*n);std::vector<uint8_t> bytes;
 		auto next=std::chrono::steady_clock::now();
 		while(!s_quit) {
-			std::string wanted_audio,wanted_midi;unsigned wanted_revision;
-			{std::lock_guard<std::mutex> g(io.mutex);wanted_revision=io.requested;wanted_audio=io.audio;wanted_midi=io.midi;}
+			std::string wanted_audio,wanted_midi;unsigned wanted_revision,wanted_periods;
+			{std::lock_guard<std::mutex> g(io.mutex);wanted_revision=io.requested;wanted_audio=io.audio;wanted_midi=io.midi;wanted_periods=io.periods;}
 			if(wanted_revision!=revision) {
 				std::string error;
-				if(wanted_audio!=current_audio) {
-					if(wanted_audio.empty()){ao.reset();current_audio.clear();}
-					else {auto candidate=std::make_unique<audio_output>();if(candidate->open(wanted_audio,48000,o.period,o.periods)){ao=std::move(candidate);current_audio=wanted_audio;}else error="Cannot open audio output; previous device retained";}
+				if(wanted_audio!=current_audio || wanted_periods!=current_periods) {
+					if(wanted_audio.empty()){ao.reset();current_audio.clear();current_periods=wanted_periods;}
+					else {auto candidate=std::make_unique<audio_output>();candidate->on_xrun=[&](unsigned){++driver_xruns;};if(candidate->open(wanted_audio,48000,o.period,wanted_periods)){ao=std::move(candidate);current_audio=wanted_audio;current_periods=wanted_periods;}else error="Cannot open audio output; previous device retained";}
 				}
 				if(wanted_midi!=current_midi) {
 					if(wanted_midi.empty()){mi.reset();current_midi.clear();}
 					else {auto candidate=std::make_unique<midi_input>();if(candidate->open(wanted_midi)){mi=std::move(candidate);current_midi=wanted_midi;}else error="Cannot open MIDI input; previous device retained";}
 				}
 				revision=wanted_revision;
-				{std::lock_guard<std::mutex> g(io.mutex);if(io.requested==revision){io.audio=current_audio;io.midi=current_midi;io.error=error;io.applied=revision;}}
+				{std::lock_guard<std::mutex> g(io.mutex);if(io.requested==revision){io.audio=current_audio;io.midi=current_midi;io.periods=current_periods;io.error=error;io.applied=revision;}}
 				next=std::chrono::steady_clock::now();
 			}
 			if(mi && mi->read(bytes)){for(uint8_t b:bytes)eng.midi(0,&b,1);bytes.clear();}
+			if(ao && !ao->wait_writable())continue;
+			if(s_quit)break;
 			eng.pull(l.data(),r.data(),n);
 			if(ao){for(unsigned i=0;i<n;++i){lr[2*i]=l[i];lr[2*i+1]=r[i];}ao->write(lr.data(),n);}
 			else {next+=std::chrono::nanoseconds(int64_t(n*1e9/48000.0));std::this_thread::sleep_until(next);}
 		}
+#ifdef _WIN32
+		if(old_priority!=THREAD_PRIORITY_ERROR_RETURN)SetThreadPriority(GetCurrentThread(),old_priority);
+#endif
 	});
 
 	eiii::ui::panel_window win(ui);
 	auto save=[&]{cfg.view_width=win.width();if(!save_gui_defaults(cfg))win.view().set_menu_status("Cannot save standalone settings");};
-	standalone_menus(win,eng,cfg,request_io,save);
+	standalone_menus(win,eng,cfg,request_io,save,[&]{return driver_xruns.load();});
 	unsigned applied_io=0;
 	win.on_tick=[&]{
 		eiii::media_result result;
@@ -125,7 +135,7 @@ int run_gui(gui_options const &o)
 			win.view().set_menu_status(result.restarted?"Restarted":"");save();
 		}
 		std::string error;bool changed=false;
-		{std::lock_guard<std::mutex> g(io.mutex);if(io.applied!=applied_io){applied_io=io.applied;cfg.audio_out=io.audio;cfg.midi_in=io.midi;error=io.error;changed=true;}}
+		{std::lock_guard<std::mutex> g(io.mutex);if(io.applied!=applied_io){applied_io=io.applied;cfg.audio_out=io.audio;cfg.midi_in=io.midi;cfg.periods=io.periods;error=io.error;changed=true;}}
 		if(changed){win.view().set_menu_status(error);save();}
 		auto warning=eng.take_warning();if(!warning.empty())win.view().set_menu_status(warning);
 	};
@@ -170,6 +180,7 @@ int run_gui(gui_options const &o)
 	bool macro_running = !macro.empty();
 
 	auto last_frame = std::chrono::steady_clock::now(), last_state_check = last_frame;
+	uint64_t last_underruns=0;unsigned last_driver_xruns=0;
 	while (!s_quit && !win.close_requested())
 	{
 #ifndef _WIN32
@@ -188,6 +199,13 @@ int run_gui(gui_options const &o)
 		if (now - last_state_check >= std::chrono::seconds(1))
 		{
 			last_state_check = now;
+			auto stats=eng.stats();auto xruns=driver_xruns.load();
+			if(stats.underruns!=last_underruns || xruns!=last_driver_xruns) {
+				std::ofstream log(standalone_storage_path("eiii-standalone-audio.log",true),std::ios::app);
+				log<<"time="<<stats.emu_seconds<<" engine_underruns="<<stats.underruns<<" missing_frames="<<stats.underrun_frames<<" driver_xruns="<<xruns<<" engine_busy="<<stats.busy_fraction<<" period="<<cfg.period<<" periods="<<cfg.periods<<"\n";
+				last_underruns=stats.underruns;last_driver_xruns=xruns;
+			}
+
 			save_disks();
 			if (std::string const st = ui.display_state(); st != saved_state) { save_gui_state(st); saved_state = st; }
 		}

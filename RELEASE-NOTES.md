@@ -1,3 +1,11 @@
+# Windows standalone 0.2.6-preview audio hotfix
+
+Fix WinMM pacing for realtime standalone use: replace Sleep polling with buffer-completion events, wait for a writable device slot before pulling engine audio, and start/restart from a filled configured queue. Scope a 1 ms timer-resolution request to the opened output and use above-normal I/O thread priority. Bound stalled-driver waits and report output starvation.
+
+Keep the existing engine prebuffer; no additional engine latency is introduced. Audio offers live 2/4/8 device-buffer choices and underrun counters. Preferences remain standalone-only; audio failures keep the old device. Changed underrun counts write `eiii-standalone-audio.log` with engine/driver diagnostics. At a 256-frame/48 kHz period, 2 device buffers have 10.7 ms queue capacity; the engine queue remains 21.3 ms. These are internal queue capacities, not measured end-to-end latency.
+
+The deterministic mock-driver test exercises the actual Windows backend and passes. WIN64 EXE build, independent preference round trip and menu rendering pass. Actual Windows listening/device testing remains with the user. The included VST3 remains the unchanged, validated 0.2.5 binary. D0 IMG/HFE support and OS/Global persistence are retained. No ROM, OS or sample media is bundled.
+
 # Windows x64 0.2.5-preview
 
 Add real D0 floppy reading and OS boot through the unmodified MAME WD1772 (8 MHz). The EIII drive adapter supplies rotating MFM flux, index, head stepping and active-low motor/side signals. Accept EIII 819200-byte raw IMG and 80-track double-sided 250 kbit/s MFM HFE v1 images.

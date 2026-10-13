@@ -16,10 +16,10 @@ int main()
 	{std::ofstream out(dir/"eiii-vst3.conf");out<<"rom_dir=PLUGIN-ROM\nhd=PLUGIN-HD\nview_width=736\n";}
 	gui_options empty;load_gui_defaults(empty);
 	if(!empty.rom_dir.empty() || !empty.hd.empty() || empty.view_width)return 1;
-	gui_options saved;saved.rom_dir="Standalone ROM";saved.hd="own.img";saved.cd="bank.iso";saved.floppy="OS242.hfe";saved.midi_in="3";saved.audio_out="2";saved.view_width=2208;saved.cem_model="v2";
+	gui_options saved;saved.rom_dir="Standalone ROM";saved.hd="own.img";saved.cd="bank.iso";saved.floppy="OS242.hfe";saved.midi_in="3";saved.audio_out="2";saved.view_width=2208;saved.cem_model="v2";saved.period=512;saved.periods=2;
 	if(!save_gui_defaults(saved))return 2;
 	gui_options loaded;load_gui_defaults(loaded);
-	if(loaded.rom_dir!=saved.rom_dir || loaded.hd!=saved.hd || loaded.cd!=saved.cd || loaded.floppy!=saved.floppy || loaded.midi_in!=saved.midi_in || loaded.audio_out!=saved.audio_out || loaded.view_width!=2208 || loaded.cem_model!="v2")return 3;
+	if(loaded.rom_dir!=saved.rom_dir || loaded.hd!=saved.hd || loaded.cd!=saved.cd || loaded.floppy!=saved.floppy || loaded.midi_in!=saved.midi_in || loaded.audio_out!=saved.audio_out || loaded.view_width!=2208 || loaded.cem_model!="v2" || loaded.period!=512 || loaded.periods!=2)return 3;
 	std::string blob("disk\0changes\xff",13);
 	if(!standalone_write(standalone_hd_state(1),blob) || standalone_read(standalone_hd_state(1))!=blob)return 4;
 	if(standalone_read("eiii-vst3.conf")!="rom_dir=PLUGIN-ROM\nhd=PLUGIN-HD\nview_width=736\n")return 5;

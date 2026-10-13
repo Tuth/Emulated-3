@@ -125,6 +125,8 @@ bool audio_output::open(std::string const &name, unsigned rate, unsigned period_
 	return true;
 }
 
+bool audio_output::wait_writable(unsigned) { return m_h != nullptr; }
+
 void audio_output::write(float const *x, size_t frames)
 {
 	if (!m_h) return;

@@ -32,7 +32,7 @@
 
 namespace {
 
-#define EIII_STANDALONE_VERSION "0.2.5-preview (WD1772 D0 floppy IMG/HFE boot and media controls)"
+#define EIII_STANDALONE_VERSION "0.2.6-preview (standalone event-driven WinMM audio timing fix)"
 
 struct options_t
 {

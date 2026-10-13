@@ -36,4 +36,10 @@ check: all
 clean:
 	rm -f $(LIB_OBJ) libeiiicore.a tests/fchip_unit tests/fchip_equiv tests/cem_unit tests/cem_vs_reference tests/cem_golden tests/cem_v2_unit tools/render_trace tools/eiii_fakehost tools/cem3387_lab
 
-.PHONY: all check clean
+tests/winmm_audio: tests/winmm_audio.cpp tests/winmm_mock/windows.h tests/winmm_mock/mmsystem.h standalone/host_io_win.cpp standalone/host_io.h
+	$(CXX) $(CXXFLAGS) -Itests/winmm_mock $< -o $@
+
+check-winmm-audio: tests/winmm_audio
+	./tests/winmm_audio
+
+.PHONY: all check clean check-winmm-audio
