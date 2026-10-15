@@ -13,6 +13,7 @@ dist/
 /tests/*
 !/tests/*.*
 !/tests/winmm_mock/
+!/tests/wait_mock/
 /tools/*
 !/tools/*.*
 /standalone/eiii-standalone

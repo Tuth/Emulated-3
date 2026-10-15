@@ -1,3 +1,11 @@
+# Windows standalone and VST3 0.2.7-preview host-wait fix
+
+Fix the shared engine's Windows sub-millisecond waits. In the original MinGW binary, nanosleep truncated the 500 us buffer-full wait and 100 us offline-pull wait to zero milliseconds. The worker repeatedly polled a full queue instead of blocking. Use a reusable high-resolution waitable timer, with ordinary-timer and upward-rounded Sleep fallbacks.
+
+The original scalar CEM model, emulated clocks, oversampling, audio queue sizes, MIDI timestamps, plugin ID and saved-state formats are retained. This release does not include the rejected SIMD experiment or the compiler-only O3/LTO experiment. VST3 advertises 0.2.7-preview for host rescanning.
+
+User Windows READY captures show process CPU consumption falling from 102.3% to 12.4% of one logical processor (about 88% less); the emulation worker fell from 99.8% to 10.7%. This validates READY consumption, not sustained-polyphony CPU, driver latency or dropout-free low-buffer operation. Standalone was user-tested; the VST3 was cross-built with the same engine fix and still needs Windows host confirmation. Native firmware/MIDI/sampling/state smoke and deterministic wait/WinMM regressions pass. No proprietary media is included.
+
 # Windows standalone 0.2.6-preview audio hotfix
 
 Fix WinMM pacing for realtime standalone use: replace Sleep polling with buffer-completion events, wait for a writable device slot before pulling engine audio, and start/restart from a filled configured queue. Scope a 1 ms timer-resolution request to the opened output and use above-normal I/O thread priority. Bound stalled-driver waits and report output starvation.

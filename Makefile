@@ -43,3 +43,11 @@ check-winmm-audio: tests/winmm_audio
 	./tests/winmm_audio
 
 .PHONY: all check clean check-winmm-audio
+
+# Deterministic native model of the Windows sub-ms wait helper.
+tests/short_wait: tests/short_wait.cpp tests/wait_mock/windows.h runtime/eiii_short_wait.h
+	$(CXX) $(CXXFLAGS) -Itests/wait_mock $< -o $@
+
+check-short-wait: tests/short_wait
+	./tests/short_wait
+.PHONY: check-short-wait

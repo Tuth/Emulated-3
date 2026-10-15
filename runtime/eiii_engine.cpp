@@ -1,5 +1,6 @@
 // eiii::engine — see eiii_engine.h.
 #include "eiii_engine.h"
+#include "eiii_short_wait.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -396,7 +397,7 @@ size_t engine::pull(float *left, float *right, size_t frames)
 {
 	m_last_pull_ns = now_ns();
 	if (!m_realtime)
-		while (m_ring.fill() < frames && !m_quit && m_thread.joinable()) std::this_thread::sleep_for(std::chrono::microseconds(100));
+		while (m_ring.fill() < frames && !m_quit && m_thread.joinable()) short_pause_us(100);
 	size_t const got = m_ring.read(left, right, frames);
 	if (got < frames)
 	{
@@ -437,6 +438,7 @@ void engine::publish(bool running, char const *status)
 void engine::thread_main()
 {
 	set_ftz();
+	short_wait idle_wait; // allocate the Windows timer once, before emulation starts
 	{
 		// a modest realtime priority when the process is allowed one (RLIMIT_RTPRIO / rtkit-granted hosts); else unchanged
 		sched_param sp{}; sp.sched_priority = 10;
@@ -478,7 +480,7 @@ void engine::thread_main()
 		{
 			free_t0 = 0;
 			uint64_t const want_w = R + m_latency;
-			if (W >= want_w) { m_primed = true; std::this_thread::sleep_for(std::chrono::microseconds(500)); continue; }
+			if (W >= want_w) { m_primed = true; idle_wait.wait_us(500); continue; }
 			target_ring = std::min(want_w, W + step_frames);
 		}
 		else
